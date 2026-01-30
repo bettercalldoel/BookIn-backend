@@ -1,18 +1,406 @@
+// schema.prisma
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
 }
 
-model Sample {
-  id        Int       @id @default(autoincrement())
-  name      String
-  deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+enum AccountType {
+  USER
+  TENANT
+}
 
-  @@map("samples")
+enum AuthProvider {
+  EMAIL
+  GOOGLE
+  FACEBOOK
+  TWITTER
+}
+
+enum OrderStatus {
+  MENUNGGU_PEMBAYARAN
+  MENUNGGU_KONFIRMASI_PEMBAYARAN
+  DIPROSES
+  DIBATALKAN
+  SELESAI
+}
+
+enum CancelledBy {
+  USER
+  TENANT
+  SYSTEM
+}
+
+enum PaymentMethod {
+  MANUAL_TRANSFER
+}
+
+enum PaymentProofStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum AdjustmentType {
+  PERCENT
+  NOMINAL
+}
+
+enum RateScope {
+  PROPERTY
+  ROOM_TYPE
+}
+
+// =====================
+// Accounts & Auth
+// =====================
+model Account {
+  id              String       @id @default(uuid()) @db.Uuid
+  email           String       @unique @db.VarChar(255)
+  emailVerifiedAt DateTime?    @map("email_verified_at") @db.Timestamptz(6)
+  passwordHash    String?      @map("password_hash")
+  name            String       @db.VarChar(150)
+  type            AccountType  @default(USER)
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  userProfile     UserProfile?
+  tenantProfile   TenantProfile?
+
+  oauthAccounts   OAuthAccount[]
+  emailTokens     EmailVerificationToken[]
+  resetTokens     PasswordResetToken[]
+
+  categories      PropertyCategory[] @relation("TenantCategories")
+  properties      Property[]         @relation("TenantProperties")
+
+  bookings        Booking[]          @relation("UserBookings")
+  reviewedProofs  PaymentProof[]     @relation("TenantReviewedProofs")
+
+  confirmedBookings Booking[]        @relation("TenantConfirmedBookings")
+  rateRules       RateRule[]
+
+  @@index([type], map: "idx_accounts_type")
+  @@map("accounts")
+}
+
+model UserProfile {
+  accountId String  @id @map("account_id") @db.Uuid
+  avatarUrl String? @map("avatar_url")
+
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model TenantProfile {
+  accountId   String  @id @map("account_id") @db.Uuid
+  companyName String? @map("company_name") @db.VarChar(160)
+  avatarUrl   String? @map("avatar_url")
+
+  account     Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_profiles")
+}
+
+model OAuthAccount {
+  id             String       @id @default(uuid()) @db.Uuid
+  accountId      String       @map("account_id") @db.Uuid
+  provider       AuthProvider
+  providerUserId String       @map("provider_user_id") @db.VarChar(255)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  account        Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId], map: "uq_oauth_provider_user")
+  @@index([accountId], map: "idx_oauth_accounts_account")
+  @@map("oauth_accounts")
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  accountId String   @map("account_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId], map: "idx_evt_account")
+  @@index([expiresAt], map: "idx_evt_expires")
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  accountId String   @map("account_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId], map: "idx_prt_account")
+  @@index([expiresAt], map: "idx_prt_expires")
+  @@map("password_reset_tokens")
+}
+
+// =====================
+// Master Data
+// =====================
+model City {
+  id       String   @id @default(uuid()) @db.Uuid
+  name     String   @unique @db.VarChar(120)
+  province String?  @db.VarChar(120)
+  country  String?  @db.VarChar(120)
+
+  properties Property[]
+
+  @@map("cities")
+}
+
+// =====================
+// Property Catalog
+// =====================
+model PropertyCategory {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantAccountId String   @map("tenant_account_id") @db.Uuid
+  name            String   @db.VarChar(120)
+  description     String?
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  tenant          Account  @relation("TenantCategories", fields: [tenantAccountId], references: [id], onDelete: Restrict)
+  properties      Property[]
+
+  @@unique([tenantAccountId, name], map: "uq_category_tenant_name")
+  // NOTE: uq_category_id_tenant exists in SQL for composite-FK support
+  @@index([tenantAccountId], map: "idx_property_categories_tenant")
+  @@map("property_categories")
+}
+
+model Property {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantAccountId String   @map("tenant_account_id") @db.Uuid
+  categoryId      String   @map("category_id") @db.Uuid
+  cityId          String   @map("city_id") @db.Uuid
+
+  name            String   @db.VarChar(160)
+  description     String
+  address         String?
+
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  tenant          Account  @relation("TenantProperties", fields: [tenantAccountId], references: [id], onDelete: Restrict)
+  category        PropertyCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  city            City     @relation(fields: [cityId], references: [id], onDelete: Restrict)
+
+  images          PropertyImage[]
+  roomTypes       RoomType[]
+  rateRules       RateRule[] @relation("RateRuleProperty")
+
+  @@index([tenantAccountId], map: "idx_properties_tenant")
+  @@index([cityId], map: "idx_properties_city")
+  @@index([categoryId], map: "idx_properties_category")
+  @@index([name], map: "idx_properties_name")
+  @@map("properties")
+}
+
+model PropertyImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  propertyId String   @map("property_id") @db.Uuid
+  url        String
+  isCover    Boolean  @default(false) @map("is_cover")
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId], map: "idx_property_images_property")
+  @@map("property_images")
+}
+
+// =====================
+// Room Types & Calendar
+// =====================
+model RoomType {
+  id          String   @id @default(uuid()) @db.Uuid
+  propertyId  String   @map("property_id") @db.Uuid
+
+  name        String   @db.VarChar(120)
+  description String
+  basePrice   Decimal  @map("base_price")
+  totalUnits  Int      @map("total_units")
+  maxGuests   Int      @map("max_guests")
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  calendar    RoomTypeCalendar[]
+  rateRules   RateRule[] @relation("RateRuleRoomType")
+  bookings    Booking[]
+
+  @@unique([propertyId, name], map: "uq_room_types_property_name")
+  @@index([propertyId], map: "idx_room_types_property")
+  @@map("room_types")
+}
+
+model RoomTypeCalendar {
+  roomTypeId     String   @map("room_type_id") @db.Uuid
+  date           DateTime @db.Date
+  availableUnits Int      @map("available_units")
+  price          Decimal
+  isClosed       Boolean  @default(false) @map("is_closed")
+  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  roomType       RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+  @@id([roomTypeId, date], map: "pk_room_calendar")
+  @@index([date], map: "idx_room_type_calendar_date")
+  @@index([roomTypeId, date], map: "idx_room_calendar_room_date")
+  @@map("room_type_calendar")
+}
+
+// =====================
+// Pricing Rules
+// =====================
+model RateRule {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantAccountId String         @map("tenant_account_id") @db.Uuid
+
+  scope           RateScope
+  propertyId      String?        @map("property_id") @db.Uuid
+  roomTypeId      String?        @map("room_type_id") @db.Uuid
+
+  name            String         @db.VarChar(160)
+  startDate       DateTime       @map("start_date") @db.Date
+  endDate         DateTime       @map("end_date") @db.Date
+
+  adjustmentType  AdjustmentType @map("adjustment_type")
+  adjustmentValue Decimal        @map("adjustment_value")
+
+  isActive        Boolean        @default(true) @map("is_active")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  tenant          Account        @relation(fields: [tenantAccountId], references: [id], onDelete: Restrict)
+  property        Property?      @relation("RateRuleProperty", fields: [propertyId], references: [id], onDelete: Cascade)
+  roomType        RoomType?      @relation("RateRuleRoomType", fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantAccountId], map: "idx_rate_rules_tenant")
+  @@index([propertyId], map: "idx_rate_rules_property")
+  @@index([roomTypeId], map: "idx_rate_rules_room_type")
+  @@map("rate_rules")
+}
+
+// =====================
+// Booking / Payments / Reviews
+// =====================
+model Booking {
+  id               String      @id @default(uuid()) @db.Uuid
+  orderNo          String      @unique @map("order_no") @db.VarChar(30)
+
+  roomTypeId       String      @map("room_type_id") @db.Uuid
+  userAccountId    String      @map("user_account_id") @db.Uuid
+
+  checkIn          DateTime    @map("check_in") @db.Date
+  checkOut         DateTime    @map("check_out") @db.Date
+
+  guests           Int         @default(1)
+  units            Int         @default(1)
+
+  status           OrderStatus @default(MENUNGGU_PEMBAYARAN)
+  paymentMethod    PaymentMethod @default(MANUAL_TRANSFER) @map("payment_method")
+
+  paymentDueAt     DateTime    @map("payment_due_at") @db.Timestamptz(6)
+  proofDueAt       DateTime?   @map("proof_due_at") @db.Timestamptz(6)
+
+  totalAmount      Decimal     @map("total_amount")
+
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  cancelledAt      DateTime?   @map("cancelled_at") @db.Timestamptz(6)
+  cancelledBy      CancelledBy? @map("cancelled_by")
+  cancelReason     String?     @map("cancel_reason")
+
+  confirmedAt      DateTime?   @map("confirmed_at") @db.Timestamptz(6)
+  confirmedByTenantId String?  @map("confirmed_by_tenant_id") @db.Uuid
+
+  roomType         RoomType    @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  user             Account     @relation("UserBookings", fields: [userAccountId], references: [id], onDelete: Restrict)
+
+  confirmedByTenant Account?   @relation("TenantConfirmedBookings", fields: [confirmedByTenantId], references: [id], onDelete: SetNull)
+
+  paymentProofs     PaymentProof[]
+  nights            BookingNight[]
+  review            Review?
+
+  @@index([roomTypeId], map: "idx_bookings_room_type")
+  @@index([userAccountId], map: "idx_bookings_user")
+  @@index([status], map: "idx_bookings_status")
+  @@index([createdAt], map: "idx_bookings_created")
+  @@index([paymentDueAt], map: "idx_bookings_payment_due")
+  @@index([proofDueAt], map: "idx_bookings_proof_due")
+  @@index([checkIn], map: "idx_bookings_check_in")
+  @@index([checkOut], map: "idx_bookings_check_out")
+  @@index([confirmedAt], map: "idx_bookings_confirmed")
+  @@map("bookings")
+}
+
+model BookingNight {
+  bookingId      String   @map("booking_id") @db.Uuid
+  date           DateTime @db.Date
+  unitsReserved  Int      @default(1) @map("units_reserved")
+  pricePerNight  Decimal  @map("price_per_night")
+  releasedAt     DateTime? @map("released_at") @db.Timestamptz(6)
+
+  booking        Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@id([bookingId, date])
+  @@index([date], map: "idx_booking_nights_date")
+  @@index([bookingId], map: "idx_booking_nights_booking")
+  @@map("booking_nights")
+}
+
+model PaymentProof {
+  id               String            @id @default(uuid()) @db.Uuid
+  bookingId        String            @map("booking_id") @db.Uuid
+  proofUrl         String            @map("proof_url")
+  status           PaymentProofStatus @default(SUBMITTED)
+
+  uploadedAt       DateTime          @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  reviewedAt       DateTime?         @map("reviewed_at") @db.Timestamptz(6)
+  reviewedByTenantId String?         @map("reviewed_by_tenant_id") @db.Uuid
+  note             String?
+
+  booking          Booking           @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  reviewedByTenant Account?          @relation("TenantReviewedProofs", fields: [reviewedByTenantId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId], map: "idx_payment_proofs_booking")
+  @@index([status], map: "idx_payment_proofs_status")
+  @@index([reviewedByTenantId], map: "idx_payment_proofs_reviewed_by")
+  @@map("payment_proofs")
+}
+
+model Review {
+  id              String   @id @default(uuid()) @db.Uuid
+  bookingId       String   @unique @map("booking_id") @db.Uuid
+  rating          Int
+  comment         String
+  tenantReply     String?  @map("tenant_reply")
+  tenantRepliedAt DateTime? @map("tenant_replied_at") @db.Timestamptz(6)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  booking         Booking  @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  @@map("reviews")
 }
