@@ -182,12 +182,10 @@ model City {
   id           BigInt   @id @default(autoincrement()) @db.BigInt
   name         String   @db.Text
 
-  // kolom existing di DB: cities.province (text)
   provinceName String?  @map("province") @db.Text
 
   country      String?  @db.Text
 
-  // kolom existing di DB: cities.province_id (integer)
   provinceId   Int?     @map("province_id")
   province     Province? @relation(fields: [provinceId], references: [id], onDelete: Restrict)
 
@@ -227,7 +225,6 @@ model Property {
   tenantAccountId String   @map("tenant_account_id") @db.Uuid
   categoryId      String   @map("category_id") @db.Uuid
 
-  // DB kamu: properties.city_id bigint -> Prisma BigInt
   cityId          BigInt   @map("city_id") @db.BigInt
 
   name            String   @db.VarChar(160)
