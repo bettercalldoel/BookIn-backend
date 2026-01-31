@@ -9,6 +9,7 @@ import { ValidationMiddleware } from "./middlewares/validation.middleware.js";
 import { SampleController } from "./modules/sample/sample.controller.js";
 import { SampleRouter } from "./modules/sample/sample.router.js";
 import { SampleService } from "./modules/sample/sample.service.js";
+import bookingRouter from "./modules/booking/booking.router.js";
 
 export class App {
   app: Express;

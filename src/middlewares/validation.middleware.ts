@@ -67,3 +67,53 @@ export class ValidationMiddleware {
     };
   }
 }
+export const validateBody = (DTO: any) => {
+  return async (req: any, res: any, next: any) => {
+    const dtoInstance = plainToInstance(DTO, req.body);
+
+    const errors = await validate(dtoInstance, {
+      whitelist: true, // remove unknown properties
+      forbidNonWhitelisted: true, // error if unknown properties exist
+    });
+
+    if (errors.length > 0) {
+      return res.status(422).json({
+        message: "Validation failed",
+        errors: errors.map((err) => ({
+          field: err.property,
+          constraints: err.constraints,
+        })),
+      });
+    }
+
+    req.body = dtoInstance;
+    next();
+  };
+};
+
+/**
+ * Validate query params using DTO
+ */
+export const validateQuery = (DTO: any) => {
+  return async (req: any, res: any, next: any) => {
+    const dtoInstance = plainToInstance(DTO, req.query);
+
+    const errors = await validate(dtoInstance, {
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    });
+
+    if (errors.length > 0) {
+      return res.status(422).json({
+        message: "Validation failed",
+        errors: errors.map((err) => ({
+          field: err.property,
+          constraints: err.constraints,
+        })),
+      });
+    }
+
+    req.query = dtoInstance;
+    next();
+  };
+};
