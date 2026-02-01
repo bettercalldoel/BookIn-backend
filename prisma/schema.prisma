@@ -200,13 +200,13 @@ model City {
 // Property Catalog
 // =====================
 model PropertyCategory {
-  id              String   @id @default(uuid()) @db.Uuid
-  tenantAccountId String   @map("tenant_account_id") @db.Uuid
-  name            String   @db.VarChar(120)
-  description     String?
+  id              BigInt  @id @default(autoincrement()) @db.BigInt
+  tenantAccountId String  @map("tenant_id") @db.Uuid
+  name            String  @db.Citext
+  isSystem        Boolean @default(false) @map("is_system")
 
   // untuk "hapus" category tanpa error FK: set false
-  isActive        Boolean  @default(true) @map("is_active")
+  isActive        Boolean @default(true) @map("is_active")
 
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -222,8 +222,8 @@ model PropertyCategory {
 
 model Property {
   id              String   @id @default(uuid()) @db.Uuid
-  tenantAccountId String   @map("tenant_account_id") @db.Uuid
-  categoryId      String   @map("category_id") @db.Uuid
+  tenantAccountId String   @map("tenant_id") @db.Uuid
+  categoryId      BigInt   @map("category_id") @db.BigInt
 
   cityId          BigInt   @map("city_id") @db.BigInt
 
@@ -253,9 +253,7 @@ model PropertyImage {
   id         String   @id @default(uuid()) @db.Uuid
   propertyId String   @map("property_id") @db.Uuid
   url        String
-  isCover    Boolean  @default(false) @map("is_cover")
   sortOrder  Int      @default(0) @map("sort_order")
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
 
