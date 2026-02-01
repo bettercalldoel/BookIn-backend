@@ -22,6 +22,12 @@ export class MediaRouter {
       this.authMiddleware.requireAccountType(AccountType.TENANT),
       this.mediaController.getSignature,
     );
+
+    this.router.get(
+      "/profile-signature",
+      this.authMiddleware.requireAuth,
+      this.mediaController.getProfileSignature,
+    );
   };
 
   getRouter = () => {

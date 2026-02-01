@@ -4,6 +4,11 @@ import { ValidationMiddleware } from "../../middlewares/validation.middleware.js
 import { AuthMiddleware } from "../../middlewares/auth.middleware.js";
 import { PropertyController } from "./property.controller.js";
 import { CreatePropertyDTO } from "./dto/create-property.dto.js";
+import { UpdatePropertyDTO } from "./dto/update-property.dto.js";
+import { PropertyIdParamDTO } from "./dto/property-id.dto.js";
+import { CreateRoomDTO } from "./dto/create-room.dto.js";
+import { UpdateRoomDTO } from "./dto/update-room.dto.js";
+import { RoomIdParamDTO } from "./dto/room-id.dto.js";
 
 export class PropertyRouter {
   private router: Router;
@@ -18,6 +23,43 @@ export class PropertyRouter {
   }
 
   private initializeRoutes = () => {
+    this.router.get(
+      "/",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.propertyController.listProperties,
+    );
+
+    this.router.post(
+      "/:id/rooms",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(PropertyIdParamDTO),
+      this.validationMiddleware.validateBody(CreateRoomDTO),
+      this.propertyController.createRoom,
+    );
+
+    this.router.patch(
+      "/rooms/:id",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(RoomIdParamDTO),
+      this.validationMiddleware.validateBody(UpdateRoomDTO),
+      this.propertyController.updateRoom,
+    );
+
+    this.router.delete(
+      "/rooms/:id",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(RoomIdParamDTO),
+      this.propertyController.deleteRoom,
+    );
+
     this.router.post(
       "/",
       this.authMiddleware.requireAuth,
@@ -25,6 +67,25 @@ export class PropertyRouter {
       this.authMiddleware.requireAccountType(AccountType.TENANT),
       this.validationMiddleware.validateBody(CreatePropertyDTO),
       this.propertyController.createProperty,
+    );
+
+    this.router.patch(
+      "/:id",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(PropertyIdParamDTO),
+      this.validationMiddleware.validateBody(UpdatePropertyDTO),
+      this.propertyController.updateProperty,
+    );
+
+    this.router.delete(
+      "/:id",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(PropertyIdParamDTO),
+      this.propertyController.deleteProperty,
     );
   };
 

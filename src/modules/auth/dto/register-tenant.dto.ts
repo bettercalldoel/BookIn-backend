@@ -3,6 +3,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
   MaxLength,
 } from "class-validator";
 
@@ -21,6 +22,6 @@ export class RegisterTenantDTO {
   companyName?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUrl()
   avatarUrl?: string;
 }
