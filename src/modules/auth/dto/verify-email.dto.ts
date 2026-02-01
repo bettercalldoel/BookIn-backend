@@ -1,12 +1,17 @@
-import { IsNotEmpty, IsString, MinLength } from "class-validator";
+import { IsNotEmpty, IsOptional, IsString, MinLength } from "class-validator";
 
 export class VerifyEmailDTO {
   @IsNotEmpty()
   @IsString()
   token!: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
   @MinLength(8)
-  password!: string;
+  password?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  currentPassword?: string;
 }

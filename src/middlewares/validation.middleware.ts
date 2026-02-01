@@ -41,7 +41,7 @@ export class ValidationMiddleware {
         throw new ApiError(message, 400);
       }
 
-      req.query = dtoInstance as any;
+      Object.assign(req.query, dtoInstance as any);
 
       next();
     };

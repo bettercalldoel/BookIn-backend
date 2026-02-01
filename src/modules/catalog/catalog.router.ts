@@ -3,6 +3,7 @@ import { AccountType } from "@prisma/client";
 import { AuthMiddleware } from "../../middlewares/auth.middleware.js";
 import { ValidationMiddleware } from "../../middlewares/validation.middleware.js";
 import { CatalogController } from "./catalog.controller.js";
+import { CatalogQueryDTO } from "./dto/catalog-query.dto.js";
 import { CreateCategoryDTO } from "./dto/create-category.dto.js";
 
 export class CatalogRouter {
@@ -23,6 +24,7 @@ export class CatalogRouter {
       this.authMiddleware.requireAuth,
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateQuery(CatalogQueryDTO),
       this.catalogController.getCities,
     );
 
@@ -31,6 +33,7 @@ export class CatalogRouter {
       this.authMiddleware.requireAuth,
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateQuery(CatalogQueryDTO),
       this.catalogController.getCategories,
     );
 

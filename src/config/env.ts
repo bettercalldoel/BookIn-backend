@@ -7,6 +7,9 @@ export const APP_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";
 export const EMAIL_VERIFICATION_TTL_MINUTES = Number(
   process.env.EMAIL_VERIFICATION_TTL_MINUTES ?? "60",
 );
+export const PASSWORD_RESET_TTL_MINUTES = Number(
+  process.env.PASSWORD_RESET_TTL_MINUTES ?? "60",
+);
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
 export const SMTP_HOST = process.env.SMTP_HOST ?? "";
 export const SMTP_PORT = Number(process.env.SMTP_PORT ?? "587");

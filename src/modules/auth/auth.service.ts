@@ -4,9 +4,13 @@ import { AccountType, AuthProvider, PrismaClient } from "@prisma/client";
 import {
   EMAIL_VERIFICATION_TTL_MINUTES,
   GOOGLE_CLIENT_ID,
+  PASSWORD_RESET_TTL_MINUTES,
 } from "../../config/env.js";
 import { signAccessToken } from "../../lib/jwt.js";
-import { sendVerificationEmail } from "../../lib/mailer.js";
+import {
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from "../../lib/mailer.js";
 import { hashPassword, verifyPassword } from "../../lib/password.js";
 import { ApiError } from "../../utils/api-error.js";
 import { LoginDTO } from "./dto/login.dto.js";
@@ -15,10 +19,13 @@ import { LoginGoogleDTO } from "./dto/login-google.dto.js";
 import { RegisterSocialDTO } from "./dto/register-social.dto.js";
 import { RegisterTenantDTO } from "./dto/register-tenant.dto.js";
 import { RegisterUserDTO } from "./dto/register-user.dto.js";
+import { RequestPasswordResetDTO } from "./dto/request-password-reset.dto.js";
 import { ResendVerificationDTO } from "./dto/resend-verification.dto.js";
+import { ConfirmPasswordResetDTO } from "./dto/confirm-password-reset.dto.js";
 import { VerifyEmailDTO } from "./dto/verify-email.dto.js";
 
 const MAX_EMAIL_TTL_MINUTES = 60;
+const MAX_RESET_TTL_MINUTES = 60;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 type AccountWithProfiles = {
@@ -330,8 +337,35 @@ export class AuthService {
       throw new ApiError("Email sudah terverifikasi.", 400);
     }
 
-    const passwordHash = await hashPassword(body.password);
     const now = new Date();
+    const hasPassword = Boolean(token.account.passwordHash);
+
+    if (!hasPassword) {
+      const password = body.password?.trim();
+      if (password && password.length < 8) {
+        throw new ApiError("Password minimal 8 karakter.", 400);
+      }
+    } else {
+      const currentPassword = body.currentPassword?.trim();
+      if (!currentPassword) {
+        throw new ApiError(
+          "Password lama wajib diisi untuk verifikasi ulang email.",
+          400,
+        );
+      }
+      const matches = await verifyPassword(
+        currentPassword,
+        token.account.passwordHash ?? "",
+      );
+      if (!matches) {
+        throw new ApiError("Password lama salah.", 400);
+      }
+    }
+
+    const passwordHash =
+      !hasPassword && body.password
+        ? await hashPassword(body.password.trim())
+        : undefined;
 
     await this.prisma.$transaction([
       this.prisma.account.update({
@@ -339,7 +373,7 @@ export class AuthService {
         data: {
           isVerified: true,
           verifiedAt: now,
-          passwordHash,
+          passwordHash: passwordHash ?? token.account.passwordHash,
         },
       }),
       this.prisma.emailVerificationToken.update({
@@ -347,6 +381,21 @@ export class AuthService {
         data: { usedAt: now },
       }),
     ]);
+
+    if (!hasPassword && !passwordHash) {
+      const { token: resetToken, expiresAt } =
+        await this.createPasswordResetToken(token.accountId);
+      await sendPasswordResetEmail({
+        to: token.account.email,
+        name: this.resolveAccountName(token.account),
+        token: resetToken,
+        expiresAt,
+      });
+      return {
+        message:
+          "Email berhasil diverifikasi. Silakan cek email untuk reset password.",
+      };
+    }
 
     return {
       message: "Email berhasil diverifikasi. Silakan login kembali.",
@@ -388,6 +437,114 @@ export class AuthService {
     };
   };
 
+  requestPasswordReset = async (body: RequestPasswordResetDTO) => {
+    const email = this.normalizeEmail(body.email);
+    const account = await this.prisma.account.findUnique({
+      where: { email },
+      include: { oauthAccounts: true, userProfile: true, tenantProfile: true },
+    });
+
+    if (!account) {
+      return {
+        message:
+          "Jika email terdaftar, kami akan mengirimkan instruksi reset password.",
+      };
+    }
+
+    if (account.type !== AccountType.USER) {
+      return {
+        message:
+          "Jika email terdaftar, kami akan mengirimkan instruksi reset password.",
+      };
+    }
+
+    if (account.oauthAccounts.length > 0 || !account.passwordHash) {
+      throw new ApiError(
+        "Reset password hanya tersedia untuk akun yang dibuat dengan email dan password.",
+        400,
+      );
+    }
+
+    const { token, expiresAt } = await this.createPasswordResetToken(
+      account.id,
+    );
+
+    await sendPasswordResetEmail({
+      to: account.email,
+      name: this.resolveAccountName(account),
+      token,
+      expiresAt,
+    });
+
+    return {
+      message:
+        "Jika email terdaftar, kami akan mengirimkan instruksi reset password.",
+      email: account.email,
+      expiresAt,
+    };
+  };
+
+  confirmPasswordReset = async (body: ConfirmPasswordResetDTO) => {
+    const tokenHash = this.hashToken(body.token.trim());
+
+    const token = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: {
+        account: {
+          include: {
+            oauthAccounts: true,
+            userProfile: true,
+            tenantProfile: true,
+          },
+        },
+      },
+    });
+
+    if (!token) {
+      throw new ApiError("Token reset password tidak valid.", 400);
+    }
+
+    if (token.usedAt) {
+      throw new ApiError("Token reset password sudah digunakan.", 400);
+    }
+
+    if (token.expiresAt.getTime() < Date.now()) {
+      throw new ApiError(
+        "Token reset password sudah kedaluwarsa. Silakan lakukan permintaan ulang.",
+        400,
+      );
+    }
+
+    if (
+      token.account.type !== AccountType.USER ||
+      token.account.oauthAccounts.length > 0 ||
+      !token.account.passwordHash
+    ) {
+      throw new ApiError(
+        "Reset password hanya tersedia untuk akun yang dibuat dengan email dan password.",
+        400,
+      );
+    }
+
+    const passwordHash = await hashPassword(body.newPassword);
+    const now = new Date();
+
+    await this.prisma.$transaction([
+      this.prisma.account.update({
+        where: { id: token.accountId },
+        data: { passwordHash },
+      }),
+      this.prisma.passwordResetToken.update({
+        where: { id: token.id },
+        data: { usedAt: now },
+      }),
+    ]);
+
+    return {
+      message: "Password berhasil direset. Silakan login kembali.",
+    };
+  };
+
   getMe = async (accountId: string) => {
     if (!accountId) throw new ApiError("Unauthorized.", 401);
 
@@ -406,10 +563,152 @@ export class AuthService {
       email: account.email,
       name: this.resolveAccountName(account),
       type: account.type,
+      avatarUrl: account.avatarUrl,
       emailVerifiedAt: account.verifiedAt,
       isVerified: account.isVerified,
+      hasPassword: Boolean(account.passwordHash),
       userProfile: account.userProfile,
       tenantProfile: account.tenantProfile,
+    };
+  };
+
+  updateProfile = async (
+    accountId: string,
+    body: { name?: string; avatarUrl?: string },
+  ) => {
+    if (!accountId) throw new ApiError("Unauthorized.", 401);
+
+    const account = await this.prisma.account.findUnique({
+      where: { id: accountId },
+      include: { userProfile: true },
+    });
+
+    if (!account) throw new ApiError("Akun tidak ditemukan.", 404);
+    if (account.type !== AccountType.USER) {
+      throw new ApiError("Forbidden.", 403);
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (body.avatarUrl !== undefined) {
+      updates.avatarUrl = body.avatarUrl?.trim() || null;
+    }
+
+    const name = body.name?.trim();
+    if (name) {
+      if (account.userProfile) {
+        await this.prisma.userProfile.update({
+          where: { accountId },
+          data: { fullName: name },
+        });
+      } else {
+        await this.prisma.userProfile.create({
+          data: {
+            accountId,
+            fullName: name,
+          },
+        });
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await this.prisma.account.update({
+        where: { id: accountId },
+        data: updates,
+      });
+    }
+
+    return {
+      message: "Profil berhasil diperbarui.",
+    };
+  };
+
+  updatePassword = async (
+    accountId: string,
+    body: { currentPassword?: string; newPassword: string },
+  ) => {
+    if (!accountId) throw new ApiError("Unauthorized.", 401);
+
+    const account = await this.prisma.account.findUnique({
+      where: { id: accountId },
+    });
+
+    if (!account) throw new ApiError("Akun tidak ditemukan.", 404);
+    if (account.type !== AccountType.USER) {
+      throw new ApiError("Forbidden.", 403);
+    }
+
+    if (account.passwordHash) {
+      if (!body.currentPassword) {
+        throw new ApiError("Password saat ini wajib diisi.", 400);
+      }
+      const matches = await verifyPassword(
+        body.currentPassword,
+        account.passwordHash,
+      );
+      if (!matches) {
+        throw new ApiError("Password saat ini salah.", 400);
+      }
+    }
+
+    const passwordHash = await hashPassword(body.newPassword);
+    await this.prisma.account.update({
+      where: { id: accountId },
+      data: { passwordHash },
+    });
+
+    return {
+      message: "Password berhasil diperbarui.",
+    };
+  };
+
+  updateEmail = async (accountId: string, body: { email: string }) => {
+    if (!accountId) throw new ApiError("Unauthorized.", 401);
+
+    const account = await this.prisma.account.findUnique({
+      where: { id: accountId },
+      include: { userProfile: true, tenantProfile: true },
+    });
+
+    if (!account) throw new ApiError("Akun tidak ditemukan.", 404);
+    if (account.type !== AccountType.USER) {
+      throw new ApiError("Forbidden.", 403);
+    }
+
+    const email = this.normalizeEmail(body.email);
+    if (email === account.email) {
+      throw new ApiError("Email baru sama dengan email sekarang.", 400);
+    }
+
+    const existing = await this.prisma.account.findUnique({
+      where: { email },
+    });
+    if (existing) {
+      throw new ApiError("Email sudah terdaftar.", 409);
+    }
+
+    await this.prisma.account.update({
+      where: { id: accountId },
+      data: {
+        email,
+        isVerified: false,
+        verifiedAt: null,
+      },
+    });
+
+    const { token, expiresAt } =
+      await this.createEmailVerificationToken(accountId);
+    await sendVerificationEmail({
+      to: email,
+      name: this.resolveAccountName(account),
+      token,
+      expiresAt,
+    });
+
+    return {
+      message:
+        "Email berhasil diperbarui. Silakan cek email untuk verifikasi ulang.",
+      email,
+      expiresAt,
     };
   };
 
@@ -474,6 +773,27 @@ export class AuthService {
     const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
 
     await this.prisma.emailVerificationToken.create({
+      data: {
+        accountId,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    return { token, expiresAt };
+  }
+
+  private async createPasswordResetToken(accountId: string) {
+    const token = crypto.randomBytes(32).toString("base64url");
+    const tokenHash = this.hashToken(token);
+    const ttlMinutes =
+      Number.isFinite(PASSWORD_RESET_TTL_MINUTES) &&
+      PASSWORD_RESET_TTL_MINUTES > 0
+        ? Math.min(PASSWORD_RESET_TTL_MINUTES, MAX_RESET_TTL_MINUTES)
+        : MAX_RESET_TTL_MINUTES;
+    const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+
+    await this.prisma.passwordResetToken.create({
       data: {
         accountId,
         tokenHash,

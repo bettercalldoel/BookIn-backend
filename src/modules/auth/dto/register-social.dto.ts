@@ -4,6 +4,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
   MaxLength,
 } from "class-validator";
 import { AccountType, AuthProvider } from "@prisma/client";
@@ -33,6 +34,6 @@ export class RegisterSocialDTO {
   companyName?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUrl()
   avatarUrl?: string;
 }
