@@ -8,3 +8,14 @@ export const EMAIL_VERIFICATION_TTL_MINUTES = Number(
   process.env.EMAIL_VERIFICATION_TTL_MINUTES ?? "60",
 );
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
+export const SMTP_HOST = process.env.SMTP_HOST ?? "";
+export const SMTP_PORT = Number(process.env.SMTP_PORT ?? "587");
+export const SMTP_USER = process.env.SMTP_USER ?? "";
+export const SMTP_PASS = process.env.SMTP_PASS ?? "";
+export const SMTP_FROM = process.env.SMTP_FROM ?? "";
+export const SMTP_SECURE = process.env.SMTP_SECURE === "true";
+export const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME ?? "";
+export const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY ?? "";
+export const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET ?? "";
+export const CLOUDINARY_UPLOAD_FOLDER =
+  process.env.CLOUDINARY_UPLOAD_FOLDER ?? "";
