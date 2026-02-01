@@ -10,6 +10,19 @@ import { SampleController } from "./modules/sample/sample.controller.js";
 import { SampleRouter } from "./modules/sample/sample.router.js";
 import { SampleService } from "./modules/sample/sample.service.js";
 import bookingRouter from "./modules/booking/booking.router.js";
+import { AuthMiddleware } from "./middlewares/auth.middleware.js";
+import { AuthController } from "./modules/auth/auth.controller.js";
+import { AuthRouter } from "./modules/auth/auth.router.js";
+import { AuthService } from "./modules/auth/auth.service.js";
+import { CatalogController } from "./modules/catalog/catalog.controller.js";
+import { CatalogRouter } from "./modules/catalog/catalog.router.js";
+import { CatalogService } from "./modules/catalog/catalog.service.js";
+import { MediaController } from "./modules/media/media.controller.js";
+import { MediaRouter } from "./modules/media/media.router.js";
+import { MediaService } from "./modules/media/media.service.js";
+import { PropertyController } from "./modules/property/property.controller.js";
+import { PropertyRouter } from "./modules/property/property.router.js";
+import { PropertyService } from "./modules/property/property.service.js";
 
 export class App {
   app: Express;
@@ -32,21 +45,43 @@ export class App {
     const prismaClient = prisma;
 
     // services
-    const sampleService = new SampleService(prismaClient);
+    const authService = new AuthService(prismaClient);
+    const catalogService = new CatalogService(prismaClient);
+    const mediaService = new MediaService();
+    const propertyService = new PropertyService(prismaClient);
 
     // controllers
-    const sampleController = new SampleController(sampleService);
+    const authController = new AuthController(authService);
+    const catalogController = new CatalogController(catalogService);
+    const mediaController = new MediaController(mediaService);
+    const propertyController = new PropertyController(propertyService);
 
     // middlewares
     const validationMiddleware = new ValidationMiddleware();
+    const authMiddleware = new AuthMiddleware(prismaClient);
 
     // routers
-    const sampleRouter = new SampleRouter(
-      sampleController,
+    const authRouter = new AuthRouter(
+      authController,
       validationMiddleware,
+      authMiddleware,
+    );
+    const catalogRouter = new CatalogRouter(
+      catalogController,
+      validationMiddleware,
+      authMiddleware,
+    );
+    const mediaRouter = new MediaRouter(mediaController, authMiddleware);
+    const propertyRouter = new PropertyRouter(
+      propertyController,
+      validationMiddleware,
+      authMiddleware,
     );
 
-    this.app.use("/samples", sampleRouter.getRouter());
+    this.app.use("/auth", authRouter.getRouter());
+    this.app.use("/catalog", catalogRouter.getRouter());
+    this.app.use("/media", mediaRouter.getRouter());
+    this.app.use("/properties", propertyRouter.getRouter());
   }
 
   private handleError() {
