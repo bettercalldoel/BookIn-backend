@@ -9,6 +9,7 @@ import { PropertyIdParamDTO } from "./dto/property-id.dto.js";
 import { CreateRoomDTO } from "./dto/create-room.dto.js";
 import { UpdateRoomDTO } from "./dto/update-room.dto.js";
 import { RoomIdParamDTO } from "./dto/room-id.dto.js";
+import { SearchPropertyQueryDTO } from "./dto/search-property.dto.js";
 
 export class PropertyRouter {
   private router: Router;
@@ -23,6 +24,18 @@ export class PropertyRouter {
   }
 
   private initializeRoutes = () => {
+    this.router.get(
+      "/search",
+      this.validationMiddleware.validateQuery(SearchPropertyQueryDTO),
+      this.propertyController.listPublicProperties,
+    );
+
+    this.router.get(
+      "/public/:id",
+      this.validationMiddleware.validateParams(PropertyIdParamDTO),
+      this.propertyController.getPublicProperty,
+    );
+
     this.router.get(
       "/",
       this.authMiddleware.requireAuth,

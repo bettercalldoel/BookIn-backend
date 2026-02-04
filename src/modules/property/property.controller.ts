@@ -5,6 +5,7 @@ import { CreatePropertyDTO } from "./dto/create-property.dto.js";
 import { UpdatePropertyDTO } from "./dto/update-property.dto.js";
 import { CreateRoomDTO } from "./dto/create-room.dto.js";
 import { UpdateRoomDTO } from "./dto/update-room.dto.js";
+import { SearchPropertyQueryDTO } from "./dto/search-property.dto.js";
 
 export class PropertyController {
   constructor(private propertyService: PropertyService) {}
@@ -16,6 +17,20 @@ export class PropertyController {
     }
 
     const result = await this.propertyService.listProperties(tenantAccountId);
+    res.status(200).json(result);
+  };
+
+  listPublicProperties = async (req: Request, res: Response) => {
+    const result = await this.propertyService.listPublicProperties(
+      req.query as unknown as SearchPropertyQueryDTO,
+    );
+    res.status(200).json(result);
+  };
+
+  getPublicProperty = async (req: Request, res: Response) => {
+    const result = await this.propertyService.getPublicProperty(
+      String(req.params.id ?? ""),
+    );
     res.status(200).json(result);
   };
 

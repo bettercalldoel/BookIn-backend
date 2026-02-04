@@ -1,48 +1,73 @@
 import { Router } from "express";
+import { AccountType } from "@prisma/client";
 import { BookingController } from "./booking.controller.js";
-import { authMiddleware } from "../../middlewares/auth.middleware.js";
-import {
-  validateBody,
-  validateQuery,
-} from "../../middlewares/validation.middleware.js";
-
+import { AuthMiddleware } from "../../middlewares/auth.middleware.js";
+import { ValidationMiddleware } from "../../middlewares/validation.middleware.js";
 import { CreateBookingDTO } from "./dto/create-booking.dto.js";
 import { ListBookingDTO } from "./dto/list-booking.dto.js";
 import { CancelBookingDTO } from "./dto/cancel-booking.dto.js";
+import { BookingIdParamDTO } from "./dto/booking-id.dto.js";
 
-const router = Router();
+export class BookingRouter {
+  private router: Router;
 
-/**
- * LIST BOOKINGS
- * GET /api/bookings
- */
-router.get(
-  "/",
-  authMiddleware,
-  validateQuery(ListBookingDTO),
-  BookingController.list,
-);
+  constructor(
+    private bookingController: BookingController,
+    private validationMiddleware: ValidationMiddleware,
+    private authMiddleware: AuthMiddleware,
+  ) {
+    this.router = Router();
+    this.initializeRoutes();
+  }
 
-/**
- * CREATE BOOKING
- * POST /api/bookings
- */
-router.post(
-  "/",
-  authMiddleware,
-  validateBody(CreateBookingDTO),
-  BookingController.create,
-);
+  private initializeRoutes = () => {
+    this.router.get(
+      "/",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.USER),
+      this.validationMiddleware.validateQuery(ListBookingDTO),
+      this.bookingController.list,
+    );
 
-/**
- * CANCEL BOOKING
- * POST /api/bookings/:id/cancel
- */
-router.post(
-  "/:id/cancel",
-  authMiddleware,
-  validateBody(CancelBookingDTO),
-  BookingController.cancel,
-);
+    this.router.get(
+      "/options",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.USER),
+      this.bookingController.options,
+    );
 
-export default router;
+    this.router.post(
+      "/preview",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.USER),
+      this.validationMiddleware.validateBody(CreateBookingDTO),
+      this.bookingController.preview,
+    );
+
+    this.router.post(
+      "/",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.USER),
+      this.validationMiddleware.validateBody(CreateBookingDTO),
+      this.bookingController.create,
+    );
+
+    this.router.post(
+      "/:id/cancel",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.USER),
+      this.validationMiddleware.validateParams(BookingIdParamDTO),
+      this.validationMiddleware.validateBody(CancelBookingDTO),
+      this.bookingController.cancel,
+    );
+  };
+
+  getRouter = () => {
+    return this.router;
+  };
+}

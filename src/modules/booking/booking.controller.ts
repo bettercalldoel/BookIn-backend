@@ -11,34 +11,52 @@ const resolveUserId = (req: Request) => {
 };
 
 export class BookingController {
-  static create = async (req: Request, res: Response) => {
+  constructor(private bookingService: BookingService) {}
+
+  create = async (req: Request, res: Response) => {
     const userId = resolveUserId(req);
     if (!userId) throw new ApiError("Unauthorized.", 401);
 
-    const result = await BookingService.create(
+    const result = await this.bookingService.create(
       userId,
       req.body as CreateBookingDTO,
     );
     res.status(201).json(result);
   };
 
-  static list = async (req: Request, res: Response) => {
+  preview = async (req: Request, res: Response) => {
     const userId = resolveUserId(req);
     if (!userId) throw new ApiError("Unauthorized.", 401);
 
-    const result = await BookingService.list(
+    const result = await this.bookingService.preview(
+      userId,
+      req.body as CreateBookingDTO,
+    );
+    res.status(200).json(result);
+  };
+
+  list = async (req: Request, res: Response) => {
+    const userId = resolveUserId(req);
+    if (!userId) throw new ApiError("Unauthorized.", 401);
+
+    const result = await this.bookingService.list(
       userId,
       req.query as unknown as ListBookingDTO,
     );
     res.status(200).json(result);
   };
 
-  static cancel = async (req: Request, res: Response) => {
+  options = async (_req: Request, res: Response) => {
+    const result = await this.bookingService.listOptions();
+    res.status(200).json(result);
+  };
+
+  cancel = async (req: Request, res: Response) => {
     const bookingId = String(req.params.id ?? "");
     if (!bookingId) throw new ApiError("Booking ID required.", 400);
 
     const { cancelledBy } = req.body as CancelBookingDTO;
-    const result = await BookingService.cancel(bookingId, cancelledBy);
+    const result = await this.bookingService.cancel(bookingId, cancelledBy);
     res.status(200).json(result);
   };
 }

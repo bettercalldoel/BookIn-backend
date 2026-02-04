@@ -33,32 +33,44 @@ enum OrderStatus {
   DIPROSES
   DIBATALKAN
   SELESAI
+
+  @@map("order_status")
 }
 
 enum CancelledBy {
   USER
   TENANT
   SYSTEM
+
+  @@map("cancelled_by")
 }
 
 enum PaymentMethod {
   MANUAL_TRANSFER
+
+  @@map("payment_method")
 }
 
 enum PaymentProofStatus {
   SUBMITTED
   APPROVED
   REJECTED
+
+  @@map("payment_proof_status")
 }
 
 enum AdjustmentType {
   PERCENT
   NOMINAL
+
+  @@map("adjustment_type")
 }
 
 enum RateScope {
   PROPERTY
   ROOM_TYPE
+
+  @@map("rate_scope")
 }
 
 // =====================
@@ -87,8 +99,7 @@ model Account {
   properties        Property[]         @relation("TenantProperties")
 
   bookings          Booking[]          @relation("UserBookings")
-  reviewedProofs    PaymentProof[]     @relation("TenantReviewedProofs")
-  confirmedBookings Booking[]          @relation("TenantConfirmedBookings")
+  tenantBookings    Booking[]          @relation("TenantBookings")
 
   rateRules       RateRule[]
 
@@ -240,6 +251,7 @@ model Property {
 
   images          PropertyImage[]
   roomTypes       RoomType[]
+  bookings        Booking[]
   rateRules       RateRule[] @relation("RateRuleProperty")
 
   @@index([tenantAccountId], map: "idx_properties_tenant")
@@ -309,6 +321,7 @@ model RoomTypeCalendar {
 // =====================
 model RateRule {
   id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
   tenantAccountId String         @map("tenant_account_id") @db.Uuid
 
   scope           RateScope
@@ -320,7 +333,11 @@ model RateRule {
   endDate         DateTime       @map("end_date") @db.Date
 
   adjustmentType  AdjustmentType @map("adjustment_type")
+  value           Decimal        @map("value")
   adjustmentValue Decimal        @map("adjustment_value")
+
+  priority        Int            @default(0) @map("priority")
+  label           String?        @map("label") @db.Text
 
   isActive        Boolean        @default(true) @map("is_active")
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -341,67 +358,66 @@ model RateRule {
 // =====================
 model Booking {
   id               String      @id @default(uuid()) @db.Uuid
-  orderNo          String      @unique @map("order_no") @db.VarChar(30)
+  orderNo          String      @unique @map("order_no") @db.Text
 
+  userId           String      @map("user_id") @db.Uuid
+  tenantId         String      @map("tenant_id") @db.Uuid
+  propertyId       String      @map("property_id") @db.Uuid
   roomTypeId       String      @map("room_type_id") @db.Uuid
-  userAccountId    String      @map("user_account_id") @db.Uuid
 
   checkIn          DateTime    @map("check_in") @db.Date
   checkOut         DateTime    @map("check_out") @db.Date
 
-  guests           Int         @default(1)
-  units            Int         @default(1)
+  guests           Int
+  rooms            Int
+
+  baseTotal        Decimal     @map("base_total")
+  adjustmentTotal  Decimal     @map("adjustment_total")
+  totalAmount      Decimal     @map("total_amount")
 
   status           OrderStatus @default(MENUNGGU_PEMBAYARAN)
-  paymentMethod    PaymentMethod @default(MANUAL_TRANSFER) @map("payment_method")
 
-  paymentDueAt     DateTime    @map("payment_due_at") @db.Timestamptz(6)
+  cancelledBy      CancelledBy? @map("cancelled_by")
+  cancelledAt      DateTime?   @map("cancelled_at") @db.Timestamptz(6)
+
   proofDueAt       DateTime?   @map("proof_due_at") @db.Timestamptz(6)
-
-  totalAmount      Decimal     @map("total_amount")
+  paymentDueAt     DateTime    @map("payment_due_at") @db.Timestamptz(6)
+  paymentConfirmedAt DateTime? @map("payment_confirmed_at") @db.Timestamptz(6)
 
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  cancelledAt      DateTime?   @map("cancelled_at") @db.Timestamptz(6)
-  cancelledBy      CancelledBy? @map("cancelled_by")
-  cancelReason     String?     @map("cancel_reason")
-
-  confirmedAt        DateTime? @map("confirmed_at") @db.Timestamptz(6)
-  confirmedByTenantId String?  @map("confirmed_by_tenant_id") @db.Uuid
-
   roomType         RoomType    @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
-  user             Account     @relation("UserBookings", fields: [userAccountId], references: [id], onDelete: Restrict)
+  property         Property    @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  user             Account     @relation("UserBookings", fields: [userId], references: [id], onDelete: Restrict)
+  tenant           Account     @relation("TenantBookings", fields: [tenantId], references: [id], onDelete: Restrict)
 
-  confirmedByTenant Account?   @relation("TenantConfirmedBookings", fields: [confirmedByTenantId], references: [id], onDelete: SetNull)
-
-  paymentProofs     PaymentProof[]
-  nights            BookingNight[]
-  review            Review?
+  paymentProofs    PaymentProof[]
+  nights           BookingNight[]
+  review           Review?
 
   @@index([roomTypeId], map: "idx_bookings_room_type")
-  @@index([userAccountId], map: "idx_bookings_user")
+  @@index([userId], map: "idx_bookings_user")
   @@index([status], map: "idx_bookings_status")
   @@index([createdAt], map: "idx_bookings_created")
   @@index([paymentDueAt], map: "idx_bookings_payment_due")
   @@index([proofDueAt], map: "idx_bookings_proof_due")
   @@index([checkIn], map: "idx_bookings_check_in")
   @@index([checkOut], map: "idx_bookings_check_out")
-  @@index([confirmedAt], map: "idx_bookings_confirmed")
   @@map("bookings")
 }
 
 model BookingNight {
-  bookingId      String   @map("booking_id") @db.Uuid
-  date           DateTime @db.Date
-  unitsReserved  Int      @default(1) @map("units_reserved")
-  pricePerNight  Decimal  @map("price_per_night")
-  releasedAt     DateTime? @map("released_at") @db.Timestamptz(6)
+  bookingId       String   @map("booking_id") @db.Uuid
+  stayDate        DateTime @map("stay_date") @db.Date
+  basePrice       Decimal  @map("base_price")
+  adjustmentAmount Decimal @map("adjustment_amount")
+  finalPrice      Decimal  @map("final_price")
 
-  booking        Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  booking         Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
-  @@id([bookingId, date])
-  @@index([date], map: "idx_booking_nights_date")
+  @@id([bookingId, stayDate])
+  @@index([stayDate], map: "idx_booking_nights_date")
   @@index([bookingId], map: "idx_booking_nights_booking")
   @@map("booking_nights")
 }
@@ -409,20 +425,19 @@ model BookingNight {
 model PaymentProof {
   id                 String             @id @default(uuid()) @db.Uuid
   bookingId           String             @map("booking_id") @db.Uuid
-  proofUrl            String             @map("proof_url")
-  status              PaymentProofStatus @default(SUBMITTED)
+  method             PaymentMethod      @map("method")
+  status             PaymentProofStatus @default(SUBMITTED)
+  imageUrl           String             @map("image_url")
 
-  uploadedAt          DateTime           @default(now()) @map("uploaded_at") @db.Timestamptz(6)
-  reviewedAt          DateTime?          @map("reviewed_at") @db.Timestamptz(6)
-  reviewedByTenantId  String?            @map("reviewed_by_tenant_id") @db.Uuid
-  note               String?
+  submittedAt        DateTime           @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  reviewedAt         DateTime?          @map("reviewed_at") @db.Timestamptz(6)
+  reviewNotes        String?            @map("review_notes")
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  booking             Booking            @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  reviewedByTenant    Account?           @relation("TenantReviewedProofs", fields: [reviewedByTenantId], references: [id], onDelete: SetNull)
+  booking            Booking            @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
   @@index([bookingId], map: "idx_payment_proofs_booking")
   @@index([status], map: "idx_payment_proofs_status")
-  @@index([reviewedByTenantId], map: "idx_payment_proofs_reviewed_by")
   @@map("payment_proofs")
 }
 
