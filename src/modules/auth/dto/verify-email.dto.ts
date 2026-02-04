@@ -5,6 +5,11 @@ export class VerifyEmailDTO {
   @IsString()
   token!: string;
 
+  @IsNotEmpty()
+  @IsString()
+  @MinLength(2)
+  name!: string;
+
   @IsOptional()
   @IsString()
   @MinLength(8)

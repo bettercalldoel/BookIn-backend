@@ -44,7 +44,7 @@ export class AuthService {
   registerUser = async (body: RegisterUserDTO) => {
     const email = this.normalizeEmail(body.email);
     await this.ensureEmailAvailable(email);
-    const fullName = body.name.trim();
+    const fullName = body.name?.trim() ?? "";
 
     const account = await this.prisma.account.create({
       data: {
@@ -78,7 +78,7 @@ export class AuthService {
   registerTenant = async (body: RegisterTenantDTO) => {
     const email = this.normalizeEmail(body.email);
     await this.ensureEmailAvailable(email);
-    const displayName = body.companyName?.trim() || body.name.trim();
+    const displayName = body.companyName?.trim() || body.name?.trim() || "";
 
     const account = await this.prisma.account.create({
       data: {
@@ -339,33 +339,56 @@ export class AuthService {
 
     const now = new Date();
     const hasPassword = Boolean(token.account.passwordHash);
+    const nextName = body.name?.trim();
+    const nextPassword = body.password?.trim();
 
-    if (!hasPassword) {
-      const password = body.password?.trim();
-      if (password && password.length < 8) {
-        throw new ApiError("Password minimal 8 karakter.", 400);
-      }
-    } else {
+    if (!nextName || nextName.length < 2) {
+      throw new ApiError("Nama wajib diisi.", 400);
+    }
+
+    if (nextPassword && nextPassword.length < 8) {
+      throw new ApiError("Password minimal 8 karakter.", 400);
+    }
+
+    if (hasPassword) {
       const currentPassword = body.currentPassword?.trim();
-      if (!currentPassword) {
-        throw new ApiError(
-          "Password lama wajib diisi untuk verifikasi ulang email.",
-          400,
+      if (currentPassword) {
+        const matches = await verifyPassword(
+          currentPassword,
+          token.account.passwordHash ?? "",
         );
-      }
-      const matches = await verifyPassword(
-        currentPassword,
-        token.account.passwordHash ?? "",
-      );
-      if (!matches) {
-        throw new ApiError("Password lama salah.", 400);
+        if (!matches) {
+          throw new ApiError("Password lama salah.", 400);
+        }
+      } else if (!nextPassword) {
+        throw new ApiError("Password wajib diisi.", 400);
       }
     }
 
-    const passwordHash =
-      !hasPassword && body.password
-        ? await hashPassword(body.password.trim())
-        : undefined;
+    const passwordHash = nextPassword
+      ? await hashPassword(nextPassword)
+      : undefined;
+
+    const profileUpdates = [];
+    if (nextName) {
+      if (token.account.type === AccountType.USER) {
+        profileUpdates.push(
+          this.prisma.userProfile.upsert({
+            where: { accountId: token.accountId },
+            update: { fullName: nextName },
+            create: { accountId: token.accountId, fullName: nextName },
+          }),
+        );
+      } else if (token.account.type === AccountType.TENANT) {
+        profileUpdates.push(
+          this.prisma.tenantProfile.upsert({
+            where: { accountId: token.accountId },
+            update: { displayName: nextName },
+            create: { accountId: token.accountId, displayName: nextName },
+          }),
+        );
+      }
+    }
 
     await this.prisma.$transaction([
       this.prisma.account.update({
@@ -380,6 +403,7 @@ export class AuthService {
         where: { id: token.id },
         data: { usedAt: now },
       }),
+      ...profileUpdates,
     ]);
 
     if (!hasPassword && !passwordHash) {
@@ -522,6 +546,17 @@ export class AuthService {
     ) {
       throw new ApiError(
         "Reset password hanya tersedia untuk akun yang dibuat dengan email dan password.",
+        400,
+      );
+    }
+
+    const isSamePassword = await verifyPassword(
+      body.newPassword,
+      token.account.passwordHash,
+    );
+    if (isSamePassword) {
+      throw new ApiError(
+        "Password baru tidak boleh sama dengan password lama.",
         400,
       );
     }
