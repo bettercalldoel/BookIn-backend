@@ -17,6 +17,22 @@ import { VerifyEmailDTO } from "./dto/verify-email.dto.js";
 export class AuthController {
   constructor(private authService: AuthService) {}
 
+  private setAuthHeader = (res: Response, token?: string) => {
+    if (token) {
+      res.setHeader("Authorization", `Bearer ${token}`);
+    }
+  };
+
+  private sendAuthResponse = (
+    res: Response,
+    result: { accessToken?: string; [key: string]: unknown },
+    status = 200,
+  ) => {
+    this.setAuthHeader(res, result.accessToken);
+    const { accessToken: _accessToken, ...body } = result;
+    res.status(status).send(body);
+  };
+
   registerUser = async (req: Request, res: Response) => {
     const result = await this.authService.registerUser(
       req.body as RegisterUserDTO,
@@ -35,26 +51,26 @@ export class AuthController {
     const result = await this.authService.registerOrLoginSocial(
       req.body as RegisterSocialDTO,
     );
-    res.status(200).send(result);
+    this.sendAuthResponse(res, result);
   };
 
   login = async (req: Request, res: Response) => {
     const result = await this.authService.login(req.body as LoginDTO);
-    res.status(200).send(result);
+    this.sendAuthResponse(res, result);
   };
 
   loginSocial = async (req: Request, res: Response) => {
     const result = await this.authService.loginSocial(
       req.body as LoginSocialDTO,
     );
-    res.status(200).send(result);
+    this.sendAuthResponse(res, result);
   };
 
   loginGoogle = async (req: Request, res: Response) => {
     const result = await this.authService.loginGoogle(
       req.body as LoginGoogleDTO,
     );
-    res.status(200).send(result);
+    this.sendAuthResponse(res, result);
   };
 
   verifyEmail = async (req: Request, res: Response) => {

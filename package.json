@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/src/index.js",
     "dev": "tsx --watch src/index.ts",
+    "db:inspect": "node scripts/db-inspect.mjs",
     "db:deploy": "npx prisma migrate deploy && npx prisma generate",
     "docker-dev:up": "docker compose -f docker-compose.dev.yml up -d",
     "docker-dev:down": "docker compose -f docker-compose.dev.yml down",

@@ -35,7 +35,11 @@ export class App {
   }
 
   private configure() {
-    this.app.use(cors());
+    this.app.use(
+      cors({
+        exposedHeaders: ["Authorization"],
+      }),
+    );
     this.app.use(loggerHttp);
     this.app.use(express.json());
   }

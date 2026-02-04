@@ -1,6 +1,5 @@
 import {
   IsEmail,
-  IsNotEmpty,
   IsOptional,
   IsString,
   IsUrl,
@@ -11,10 +10,10 @@ export class RegisterUserDTO {
   @IsEmail()
   email!: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
   @MaxLength(150)
-  name!: string;
+  name?: string;
 
   @IsOptional()
   @IsUrl()
