@@ -1,94 +1,44 @@
-import prisma from "../prisma/client.js";
-import { OrderStatus, CancelledBy } from "@prisma/client";
+import { Request, Response } from "express";
+import { BookingService } from "./booking.service.js";
 import { CreateBookingDTO } from "./dto/create-booking.dto.js";
 import { ListBookingDTO } from "./dto/list-booking.dto.js";
+import { CancelBookingDTO } from "./dto/cancel-booking.dto.js";
+import { ApiError } from "../../utils/api-error.js";
 
-export class BookingService {
-  /* =========================
-   * CREATE BOOKING
-   * ========================= */
-  static async create(userId: string, dto: CreateBookingDTO) {
-    const checkIn = new Date(dto.checkIn);
-    const checkOut = new Date(dto.checkOut);
+const resolveUserId = (req: Request) => {
+  const user = req.user as { sub?: string; id?: string } | undefined;
+  return user?.sub ?? user?.id ?? "";
+};
 
-    if (checkOut <= checkIn) {
-      throw new Error("Check-out date must be after check-in date");
-    }
+export class BookingController {
+  static create = async (req: Request, res: Response) => {
+    const userId = resolveUserId(req);
+    if (!userId) throw new ApiError("Unauthorized.", 401);
 
-    const nights =
-      (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24);
+    const result = await BookingService.create(
+      userId,
+      req.body as CreateBookingDTO,
+    );
+    res.status(201).json(result);
+  };
 
-    const PRICE_PER_NIGHT = 500_000;
-    const totalAmount = nights * PRICE_PER_NIGHT * dto.rooms;
+  static list = async (req: Request, res: Response) => {
+    const userId = resolveUserId(req);
+    if (!userId) throw new ApiError("Unauthorized.", 401);
 
-    return prisma.booking.create({
-      data: {
-        orderNo: `ORD-${Date.now()}`,
+    const result = await BookingService.list(
+      userId,
+      req.query as unknown as ListBookingDTO,
+    );
+    res.status(200).json(result);
+  };
 
-        user: {
-          connect: { id: userId },
-        },
-        roomType: {
-          connect: { id: dto.roomTypeId },
-        },
+  static cancel = async (req: Request, res: Response) => {
+    const bookingId = String(req.params.id ?? "");
+    if (!bookingId) throw new ApiError("Booking ID required.", 400);
 
-        checkIn,
-        checkOut,
-        guests: dto.guests,
-        units: dto.rooms,
-
-        totalAmount,
-        status: OrderStatus.MENUNGGU_PEMBAYARAN,
-        paymentDueAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
-      },
-    });
-  }
-
-  /* =========================
-   * LIST BOOKINGS
-   * ========================= */
-  static async list(userId: string, dto: ListBookingDTO) {
-    const where = {
-      user: {
-        id: userId,
-      },
-    };
-
-    const [data, total] = await prisma.$transaction([
-      prisma.booking.findMany({
-        where,
-        skip: (dto.page - 1) * dto.limit,
-        take: dto.limit,
-        orderBy: { createdAt: "desc" },
-        include: {
-          roomType: true,
-        },
-      }),
-      prisma.booking.count({ where }),
-    ]);
-
-    return {
-      data,
-      meta: {
-        page: dto.page,
-        limit: dto.limit,
-        total,
-        totalPages: Math.ceil(total / dto.limit),
-      },
-    };
-  }
-
-  /* =========================
-   * CANCEL BOOKING
-   * ========================= */
-  static async cancel(bookingId: string, cancelledBy: CancelledBy) {
-    return prisma.booking.update({
-      where: { id: bookingId },
-      data: {
-        status: OrderStatus.DIBATALKAN,
-        cancelledBy,
-        cancelledAt: new Date(),
-      },
-    });
-  }
+    const { cancelledBy } = req.body as CancelBookingDTO;
+    const result = await BookingService.cancel(bookingId, cancelledBy);
+    res.status(200).json(result);
+  };
 }

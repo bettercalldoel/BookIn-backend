@@ -67,6 +67,15 @@ export class ValidationMiddleware {
     };
   }
 }
+
+const sharedValidation = new ValidationMiddleware();
+
+export const validateBody = <T>(dtoClass: new () => T) =>
+  sharedValidation.validateBody(dtoClass);
+export const validateQuery = <T>(dtoClass: new () => T) =>
+  sharedValidation.validateQuery(dtoClass);
+export const validateParams = <T>(dtoClass: new () => T) =>
+  sharedValidation.validateParams(dtoClass);
 export const validateBody = (DTO: any) => {
   return async (req: any, res: any, next: any) => {
     const dtoInstance = plainToInstance(DTO, req.body);
