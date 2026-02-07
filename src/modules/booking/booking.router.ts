@@ -7,6 +7,7 @@ import { CreateBookingDTO } from "./dto/create-booking.dto.js";
 import { ListBookingDTO } from "./dto/list-booking.dto.js";
 import { CancelBookingDTO } from "./dto/cancel-booking.dto.js";
 import { BookingIdParamDTO } from "./dto/booking-id.dto.js";
+import { uploadImage } from "../../lib/multer.js";
 
 export class BookingRouter {
   private router: Router;
@@ -64,6 +65,15 @@ export class BookingRouter {
       this.validationMiddleware.validateParams(BookingIdParamDTO),
       this.validationMiddleware.validateBody(CancelBookingDTO),
       this.bookingController.cancel,
+    );
+
+    this.router.post(
+      "/:id/payment-proof",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.USER),
+      uploadImage.single("proof"),
+      this.bookingController.uploadPaymentProof,
     );
   };
 

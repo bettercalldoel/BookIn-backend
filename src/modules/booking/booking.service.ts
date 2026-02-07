@@ -3,13 +3,17 @@ import {
   AdjustmentType,
   CancelledBy,
   OrderStatus,
+  PaymentProofStatus,
   Prisma,
   PrismaClient,
   RateScope,
+  PaymentMethod,
 } from "@prisma/client";
 import { ApiError } from "../../utils/api-error.js";
 import { CreateBookingDTO } from "./dto/create-booking.dto.js";
 import { ListBookingDTO } from "./dto/list-booking.dto.js";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import path from "path";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -42,7 +46,10 @@ const DATE_FORMAT_ERROR = "Tanggal harus berformat YYYY-MM-DD.";
 const PAYMENT_DUE_HOURS = 2;
 
 export class BookingService {
-  constructor(private prisma: PrismaClient) {}
+  constructor(
+    private prisma: PrismaClient,
+    private s3: S3Client,
+  ) {}
 
   create = async (userId: string, dto: CreateBookingDTO) => {
     const result = await this.prisma.$transaction(async (tx) => {
@@ -220,6 +227,34 @@ export class BookingService {
         cancelledAt: new Date(),
       },
     });
+  };
+
+  uploadPaymentProof = async (bookingId: string, file: Express.Multer.File) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const fileName = `payment-proofs/${bookingId}/${Date.now()}${ext}`;
+
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: process.env.S3_BUCKET_NAME,
+        Key: fileName,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+      }),
+    );
+    const fileUrl = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.S3_REGION}.amazonaws.com/${fileName}`;
+
+    await this.prisma.paymentProof.create({
+      data: {
+        bookingId,
+        imageUrl: fileUrl,
+        status: PaymentProofStatus.SUBMITTED,
+        method: PaymentMethod.MANUAL_TRANSFER,
+      },
+    });
+    return {
+      message: "Payment proof uploaded successfully.",
+      imageUrl: fileUrl,
+    };
   };
 
   private async buildQuote(client: DbClient, dto: CreateBookingDTO) {

@@ -59,4 +59,15 @@ export class BookingController {
     const result = await this.bookingService.cancel(bookingId, cancelledBy);
     res.status(200).json(result);
   };
+
+  uploadPaymentProof = async (req: Request, res: Response) => {
+    const bookingId = String(req.params.id ?? "");
+    if (!bookingId) throw new ApiError("Booking ID required.", 400);
+
+    if (!req.file) {
+      throw new ApiError("Payment proof file is required.", 400);
+    }
+    const result = this.bookingService.uploadPaymentProof(bookingId, req.file);
+    res.status(200).json(result);
+  };
 }
