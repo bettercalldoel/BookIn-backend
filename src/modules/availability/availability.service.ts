@@ -183,6 +183,13 @@ export class AvailabilityService {
       }
     }
 
+    if (!body.isClosed && body.closeUnits !== undefined) {
+      throw new ApiError(
+        "Jumlah unit yang ditutup hanya boleh diisi saat aksi tutup room.",
+        400,
+      );
+    }
+
     if (
       body.availableUnits !== undefined &&
       body.availableUnits > roomType.totalUnits
@@ -201,12 +208,34 @@ export class AvailabilityService {
     const updates = dates.map((date) => {
       const key = this.toDateKey(date);
       const existing = existingMap.get(key);
-      const isClosed = body.isClosed;
-      const availableUnits = isClosed
-        ? 0
-        : (body.availableUnits ??
+      const currentAvailableUnits =
+        existing?.availableUnits ?? roomType.totalUnits;
+      let isClosed = body.isClosed;
+      let availableUnits: number;
+
+      if (body.isClosed) {
+        if (body.closeUnits !== undefined) {
+          if (body.closeUnits > currentAvailableUnits) {
+            throw new ApiError(
+              `Jumlah room yang ditutup pada tanggal ${key} melebihi stok tersedia (${currentAvailableUnits} unit).`,
+              400,
+            );
+          }
+
+          availableUnits = currentAvailableUnits - body.closeUnits;
+          isClosed = availableUnits === 0;
+        } else {
+          availableUnits = 0;
+          isClosed = true;
+        }
+      } else {
+        availableUnits =
+          body.availableUnits ??
           existing?.availableUnits ??
-          roomType.totalUnits);
+          roomType.totalUnits;
+        isClosed = false;
+      }
+
       const price = existing?.price ?? roomType.basePrice;
 
       return this.prisma.roomTypeCalendar.upsert({

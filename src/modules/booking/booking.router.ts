@@ -7,6 +7,12 @@ import { CreateBookingDTO } from "./dto/create-booking.dto.js";
 import { ListBookingDTO } from "./dto/list-booking.dto.js";
 import { CancelBookingDTO } from "./dto/cancel-booking.dto.js";
 import { BookingIdParamDTO } from "./dto/booking-id.dto.js";
+import { ListTenantPaymentProofDTO } from "./dto/list-tenant-payment-proof.dto.js";
+import { PaymentProofIdParamDTO } from "./dto/payment-proof-id.dto.js";
+import { CreateReviewDTO } from "./dto/create-review.dto.js";
+import { ReplyReviewDTO } from "./dto/reply-review.dto.js";
+import { ListTenantReviewDTO } from "./dto/list-tenant-review.dto.js";
+import { ReviewIdParamDTO } from "./dto/review-id.dto.js";
 import { uploadImage } from "../../lib/multer.js";
 
 export class BookingRouter {
@@ -57,6 +63,62 @@ export class BookingRouter {
       this.bookingController.create,
     );
 
+    this.router.get(
+      "/tenant/payment-proofs",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateQuery(ListTenantPaymentProofDTO),
+      this.bookingController.listTenantPaymentProofs,
+    );
+
+    this.router.get(
+      "/tenant/reviews",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateQuery(ListTenantReviewDTO),
+      this.bookingController.listTenantReviews,
+    );
+
+    this.router.post(
+      "/tenant/reviews/:id/reply",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(ReviewIdParamDTO),
+      this.validationMiddleware.validateBody(ReplyReviewDTO),
+      this.bookingController.replyReview,
+    );
+
+    this.router.post(
+      "/tenant/payment-proofs/:id/approve",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(PaymentProofIdParamDTO),
+      this.bookingController.approvePaymentProof,
+    );
+
+    this.router.post(
+      "/tenant/payment-proofs/:id/reject",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(PaymentProofIdParamDTO),
+      this.bookingController.rejectPaymentProof,
+    );
+
+    this.router.post(
+      "/:id/review",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.USER),
+      this.validationMiddleware.validateParams(BookingIdParamDTO),
+      this.validationMiddleware.validateBody(CreateReviewDTO),
+      this.bookingController.createReview,
+    );
+
     this.router.post(
       "/:id/cancel",
       this.authMiddleware.requireAuth,
@@ -72,6 +134,7 @@ export class BookingRouter {
       this.authMiddleware.requireAuth,
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.USER),
+      this.validationMiddleware.validateParams(BookingIdParamDTO),
       uploadImage.single("proof"),
       this.bookingController.uploadPaymentProof,
     );

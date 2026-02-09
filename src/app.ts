@@ -106,6 +106,38 @@ export class App {
     this.app.use("/catalog", catalogRouter.getRouter());
     this.app.use("/media", mediaRouter.getRouter());
     this.app.use("/properties", propertyRouter.getRouter());
+
+    this.startBookingAutoCancelJob(bookingService);
+  }
+
+  private startBookingAutoCancelJob(bookingService: BookingService) {
+    const run = async () => {
+      try {
+        const completed = await bookingService.autoCompleteFinishedBookings();
+        if (completed.completed > 0) {
+          console.log(
+            `[BookingJob] Marked ${completed.completed} booking(s) as selesai.`,
+          );
+        }
+
+        const result = await bookingService.autoCancelExpiredUnpaidBookings();
+        if (result.cancelled > 0) {
+          console.log(
+            `[BookingJob] Auto-cancelled ${result.cancelled} expired unpaid booking(s).`,
+          );
+        }
+      } catch (error) {
+        console.error(
+          "[BookingJob] Failed to auto-cancel expired bookings.",
+          error,
+        );
+      }
+    };
+
+    void run();
+    setInterval(() => {
+      void run();
+    }, 60 * 1000).unref();
   }
 
   private handleError() {

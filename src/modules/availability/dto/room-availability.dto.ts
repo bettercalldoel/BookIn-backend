@@ -28,4 +28,9 @@ export class UpdateRoomAvailabilityDTO {
   @IsInt()
   @Min(0)
   availableUnits?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  closeUnits?: number;
 }
