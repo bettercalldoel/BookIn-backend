@@ -10,6 +10,11 @@ import { SearchPropertyQueryDTO } from "./dto/search-property.dto.js";
 export class PropertyController {
   constructor(private propertyService: PropertyService) {}
 
+  listPublicCategories = async (_req: Request, res: Response) => {
+    const result = await this.propertyService.listPublicCategories();
+    res.status(200).json(result);
+  };
+
   listProperties = async (req: Request, res: Response) => {
     const tenantAccountId = req.user?.sub ?? "";
     if (!tenantAccountId) {

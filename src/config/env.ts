@@ -22,3 +22,10 @@ export const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY ?? "";
 export const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET ?? "";
 export const CLOUDINARY_UPLOAD_FOLDER =
   process.env.CLOUDINARY_UPLOAD_FOLDER ?? "";
+export const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY ?? "";
+export const XENDIT_CALLBACK_TOKEN = process.env.XENDIT_CALLBACK_TOKEN ?? "";
+export const XENDIT_API_BASE_URL =
+  process.env.XENDIT_API_BASE_URL ?? "https://api.xendit.co";
+export const XENDIT_INVOICE_EXPIRY_MINUTES = Number(
+  process.env.XENDIT_INVOICE_EXPIRY_MINUTES ?? "30",
+);

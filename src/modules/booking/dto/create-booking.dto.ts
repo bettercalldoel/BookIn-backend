@@ -1,4 +1,12 @@
-import { IsUUID, IsDateString, IsInt, Min } from "class-validator";
+import { PaymentMethod } from "@prisma/client";
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsUUID,
+  Min,
+} from "class-validator";
 
 export class CreateBookingDTO {
   @IsUUID()
@@ -20,4 +28,8 @@ export class CreateBookingDTO {
   @IsInt()
   @Min(1)
   rooms!: number;
+
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
 }

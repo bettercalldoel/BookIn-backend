@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "test": "tsx --test src/**/*.test.ts",
     "start": "node dist/src/index.js",
     "dev": "tsx --watch src/index.ts",
     "db:inspect": "node scripts/db-inspect.mjs",

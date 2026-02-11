@@ -101,6 +101,7 @@ const formatDateTime = (value: Date) =>
 
 const toPaymentMethodLabel = (method: PaymentMethod) => {
   if (method === PaymentMethod.MANUAL_TRANSFER) return "Transfer Manual";
+  if (method === PaymentMethod.XENDIT) return "Xendit Payment Gateway";
   return method;
 };
 

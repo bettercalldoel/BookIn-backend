@@ -40,6 +40,19 @@ export class BookingController {
     res.status(200).json(result);
   };
 
+  xenditWebhook = async (req: Request, res: Response) => {
+    const callbackHeader = req.headers["x-callback-token"];
+    const callbackToken = Array.isArray(callbackHeader)
+      ? callbackHeader[0]
+      : callbackHeader;
+
+    const result = await this.bookingService.processXenditWebhook(
+      callbackToken,
+      req.body as Record<string, unknown>,
+    );
+    res.status(200).json(result);
+  };
+
   list = async (req: Request, res: Response) => {
     const userId = resolveUserId(req);
     if (!userId) throw new ApiError("Unauthorized.", 401);

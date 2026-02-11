@@ -28,6 +28,11 @@ export class BookingRouter {
   }
 
   private initializeRoutes = () => {
+    this.router.post(
+      "/payment-gateway/xendit/webhook",
+      this.bookingController.xenditWebhook,
+    );
+
     this.router.get(
       "/",
       this.authMiddleware.requireAuth,

@@ -25,6 +25,11 @@ export class PropertyRouter {
 
   private initializeRoutes = () => {
     this.router.get(
+      "/categories",
+      this.propertyController.listPublicCategories,
+    );
+
+    this.router.get(
       "/search",
       this.validationMiddleware.validateQuery(SearchPropertyQueryDTO),
       this.propertyController.listPublicProperties,

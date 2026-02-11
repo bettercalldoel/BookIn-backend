@@ -10,8 +10,14 @@ import {
   RateScope,
 } from "@prisma/client";
 import { ApiError } from "../../utils/api-error.js";
+import {
+  APP_BASE_URL,
+  XENDIT_CALLBACK_TOKEN,
+  XENDIT_SECRET_KEY,
+} from "../../config/env.js";
 import { uploadImageBuffer } from "../../lib/cloudinary.js";
 import { sendBookingReceiptEmail } from "../../lib/mailer.js";
+import { createXenditInvoice, getXenditInvoiceById } from "../../lib/xendit.js";
 import { CreateBookingDTO } from "./dto/create-booking.dto.js";
 import { ListTenantPaymentProofDTO } from "./dto/list-tenant-payment-proof.dto.js";
 import { ListBookingDTO } from "./dto/list-booking.dto.js";
@@ -47,6 +53,13 @@ type BookingQuote = {
   totalAmount: Prisma.Decimal;
 };
 
+type XenditInvoiceWebhookPayload = {
+  id?: unknown;
+  external_id?: unknown;
+  status?: unknown;
+  paid_at?: unknown;
+};
+
 const DATE_FORMAT_ERROR = "Tanggal harus berformat YYYY-MM-DD.";
 const PAYMENT_PROOF_UPLOAD_TTL_MINUTES = 30;
 
@@ -54,6 +67,8 @@ export class BookingService {
   constructor(private prisma: PrismaClient) {}
 
   create = async (userId: string, dto: CreateBookingDTO) => {
+    const paymentMethod = dto.paymentMethod ?? PaymentMethod.MANUAL_TRANSFER;
+
     const result = await this.prisma.$transaction(async (tx) => {
       const quote = await this.buildQuote(tx, dto);
       const paymentDueAt = new Date(
@@ -74,9 +89,13 @@ export class BookingService {
           baseTotal: quote.baseTotal,
           adjustmentTotal: quote.adjustmentTotal,
           totalAmount: quote.totalAmount,
+          paymentMethod,
           status: OrderStatus.MENUNGGU_PEMBAYARAN,
           paymentDueAt,
-          proofDueAt: paymentDueAt,
+          proofDueAt:
+            paymentMethod === PaymentMethod.MANUAL_TRANSFER
+              ? paymentDueAt
+              : null,
         },
       });
 
@@ -126,13 +145,70 @@ export class BookingService {
         orderNo: booking.orderNo,
         totalAmount: quote.totalAmount.toString(),
         paymentDueAt: booking.paymentDueAt,
+        paymentMethod,
       };
     });
 
-    return {
-      message: "Booking berhasil dibuat.",
-      ...result,
-    };
+    if (paymentMethod !== PaymentMethod.XENDIT) {
+      return {
+        message: "Booking berhasil dibuat.",
+        ...result,
+        xenditInvoiceUrl: null,
+      };
+    }
+
+    const user = await this.prisma.account.findUnique({
+      where: { id: userId },
+      select: {
+        email: true,
+      },
+    });
+
+    if (!user) {
+      await this.cancelPendingBookingBySystem(result.id);
+      throw new ApiError("Akun user tidak ditemukan.", 404);
+    }
+
+    try {
+      const invoice = await this.createGatewayInvoice({
+        bookingId: result.id,
+        orderNo: result.orderNo,
+        amount: result.totalAmount,
+        userEmail: user.email,
+      });
+
+      const updatedBooking = await this.prisma.booking.update({
+        where: { id: result.id },
+        data: {
+          xenditInvoiceId: invoice.id,
+          xenditInvoiceUrl: invoice.invoice_url,
+          xenditInvoiceStatus: invoice.status,
+          paymentDueAt:
+            invoice.expiry_date &&
+            !Number.isNaN(Date.parse(invoice.expiry_date))
+              ? new Date(invoice.expiry_date)
+              : result.paymentDueAt,
+        },
+        select: {
+          paymentDueAt: true,
+          xenditInvoiceUrl: true,
+        },
+      });
+
+      return {
+        message: "Booking berhasil dibuat.",
+        ...result,
+        paymentDueAt: updatedBooking.paymentDueAt,
+        xenditInvoiceUrl: updatedBooking.xenditInvoiceUrl,
+      };
+    } catch (error) {
+      await this.cancelPendingBookingBySystem(result.id);
+      if (error instanceof ApiError) {
+        throw error;
+      }
+
+      throw new ApiError("Gagal membuat invoice Xendit.", 502);
+    }
   };
 
   preview = async (_userId: string, dto: CreateBookingDTO) => {
@@ -161,6 +237,7 @@ export class BookingService {
   list = async (userId: string, dto: ListBookingDTO) => {
     await this.autoCompleteFinishedBookings();
     await this.autoCancelExpiredUnpaidBookings();
+    await this.syncPendingXenditBookings({ userId });
 
     const parsedPage = Number(dto.page);
     const parsedLimit = Number(dto.limit);
@@ -395,6 +472,161 @@ export class BookingService {
     return { completed: result.count };
   };
 
+  processXenditWebhook = async (
+    callbackToken: string | undefined,
+    payload: XenditInvoiceWebhookPayload,
+  ) => {
+    if (!XENDIT_CALLBACK_TOKEN) {
+      throw new ApiError("Xendit callback token belum dikonfigurasi.", 500);
+    }
+
+    if (!callbackToken || callbackToken !== XENDIT_CALLBACK_TOKEN) {
+      throw new ApiError("Invalid callback token.", 401);
+    }
+
+    const invoiceId = this.normalizeWebhookText(payload.id);
+    const externalId = this.normalizeWebhookText(payload.external_id);
+    const status =
+      this.normalizeWebhookText(payload.status)?.toUpperCase() ?? "";
+    const paidAt = this.parseWebhookDate(payload.paid_at);
+
+    if (!invoiceId && !externalId) {
+      throw new ApiError("Payload webhook Xendit tidak valid.", 400);
+    }
+
+    const whereOr: Prisma.BookingWhereInput[] = [];
+    if (invoiceId) {
+      whereOr.push({ xenditInvoiceId: invoiceId });
+    }
+    if (externalId) {
+      whereOr.push({ id: externalId });
+    }
+
+    const booking = await this.prisma.booking.findFirst({
+      where: {
+        paymentMethod: PaymentMethod.XENDIT,
+        OR: whereOr,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!booking) {
+      return {
+        message: "Webhook Xendit diterima, booking tidak ditemukan.",
+      };
+    }
+
+    await this.prisma.booking.update({
+      where: { id: booking.id },
+      data: {
+        ...(invoiceId ? { xenditInvoiceId: invoiceId } : {}),
+        ...(status ? { xenditInvoiceStatus: status } : {}),
+      },
+    });
+
+    if (status === "PAID") {
+      return this.confirmXenditBookingPayment(booking.id, paidAt ?? new Date());
+    }
+
+    if (status === "EXPIRED") {
+      const cancelled = await this.prisma.$transaction((tx) =>
+        this.cancelBookingWithInventoryRestore(
+          tx,
+          booking.id,
+          CancelledBy.SYSTEM,
+        ),
+      );
+
+      return {
+        message: cancelled
+          ? "Pembayaran Xendit kedaluwarsa, booking dibatalkan."
+          : "Webhook Xendit diterima.",
+        bookingId: booking.id,
+        status,
+      };
+    }
+
+    return {
+      message: "Webhook Xendit diterima.",
+      bookingId: booking.id,
+      status: status || null,
+    };
+  };
+
+  private syncPendingXenditBookings = async (
+    scope: Pick<Prisma.BookingWhereInput, "userId" | "tenantId">,
+  ) => {
+    if (!XENDIT_SECRET_KEY) {
+      return;
+    }
+
+    const pendingBookings = await this.prisma.booking.findMany({
+      where: {
+        ...scope,
+        paymentMethod: PaymentMethod.XENDIT,
+        status: OrderStatus.MENUNGGU_PEMBAYARAN,
+        xenditInvoiceId: {
+          not: null,
+        },
+      },
+      select: {
+        id: true,
+        xenditInvoiceId: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      take: 20,
+    });
+
+    for (const booking of pendingBookings) {
+      const invoiceId = booking.xenditInvoiceId?.trim();
+      if (!invoiceId) continue;
+
+      try {
+        const invoice = await getXenditInvoiceById(invoiceId);
+        const invoiceStatus =
+          this.normalizeWebhookText(invoice.status)?.toUpperCase() ?? null;
+        const paidAt = this.parseWebhookDate(invoice.paid_at);
+
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: {
+            ...(invoiceStatus ? { xenditInvoiceStatus: invoiceStatus } : {}),
+            ...(invoice.invoice_url
+              ? { xenditInvoiceUrl: invoice.invoice_url }
+              : {}),
+          },
+        });
+
+        if (invoiceStatus === "PAID") {
+          await this.confirmXenditBookingPayment(
+            booking.id,
+            paidAt ?? new Date(),
+          );
+          continue;
+        }
+
+        if (invoiceStatus === "EXPIRED") {
+          await this.prisma.$transaction((tx) =>
+            this.cancelBookingWithInventoryRestore(
+              tx,
+              booking.id,
+              CancelledBy.SYSTEM,
+            ),
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[BookingService] Failed to sync Xendit invoice status for booking ${booking.id}.`,
+          error,
+        );
+      }
+    }
+  };
+
   uploadPaymentProof = async (
     userId: string,
     bookingId: string,
@@ -406,6 +638,7 @@ export class BookingService {
         id: true,
         userId: true,
         status: true,
+        paymentMethod: true,
         proofDueAt: true,
         paymentDueAt: true,
       },
@@ -417,6 +650,13 @@ export class BookingService {
 
     if (booking.userId !== userId) {
       throw new ApiError("Forbidden.", 403);
+    }
+
+    if (booking.paymentMethod !== PaymentMethod.MANUAL_TRANSFER) {
+      throw new ApiError(
+        "Booking ini menggunakan pembayaran gateway. Selesaikan di halaman Xendit.",
+        400,
+      );
     }
 
     if (
@@ -483,6 +723,8 @@ export class BookingService {
     tenantAccountId: string,
     dto: ListTenantPaymentProofDTO,
   ) => {
+    await this.syncPendingXenditBookings({ tenantId: tenantAccountId });
+
     const status = dto.status ?? PaymentProofStatus.SUBMITTED;
 
     const proofs = await this.prisma.paymentProof.findMany({
@@ -535,7 +777,7 @@ export class BookingService {
       },
     });
 
-    return proofs.map((proof) => ({
+    const mappedProofs = proofs.map((proof) => ({
       id: proof.id,
       bookingId: proof.bookingId,
       method: proof.method,
@@ -563,6 +805,93 @@ export class BookingService {
         phone: proof.booking.user.userProfile?.phone ?? null,
       },
     }));
+
+    // Tenant dashboard masih berbasis "payment proof", jadi booking Xendit
+    // diproyeksikan sebagai item APPROVED agar tetap terlihat di order list.
+    if (status !== PaymentProofStatus.APPROVED) {
+      return mappedProofs;
+    }
+
+    const xenditBookings = await this.prisma.booking.findMany({
+      where: {
+        tenantId: tenantAccountId,
+        paymentMethod: PaymentMethod.XENDIT,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      select: {
+        id: true,
+        orderNo: true,
+        checkIn: true,
+        checkOut: true,
+        guests: true,
+        rooms: true,
+        totalAmount: true,
+        status: true,
+        createdAt: true,
+        paymentConfirmedAt: true,
+        xenditInvoiceUrl: true,
+        xenditInvoiceStatus: true,
+        property: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        roomType: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            userProfile: {
+              select: {
+                fullName: true,
+                phone: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const xenditVirtualProofs = xenditBookings.map((booking) => ({
+      id: `xendit-${booking.id}`,
+      bookingId: booking.id,
+      method: PaymentMethod.XENDIT,
+      status: PaymentProofStatus.APPROVED,
+      imageUrl: booking.xenditInvoiceUrl ?? "",
+      submittedAt: booking.createdAt,
+      reviewedAt: booking.paymentConfirmedAt,
+      reviewNotes: booking.xenditInvoiceStatus
+        ? `Xendit status: ${booking.xenditInvoiceStatus}`
+        : "Xendit status: PENDING",
+      booking: {
+        id: booking.id,
+        orderNo: booking.orderNo,
+        checkIn: booking.checkIn,
+        checkOut: booking.checkOut,
+        guests: booking.guests,
+        rooms: booking.rooms,
+        totalAmount: booking.totalAmount.toString(),
+        status: booking.status,
+        property: booking.property,
+        roomType: booking.roomType,
+      },
+      user: {
+        id: booking.user.id,
+        email: booking.user.email,
+        fullName: booking.user.userProfile?.fullName ?? null,
+        phone: booking.user.userProfile?.phone ?? null,
+      },
+    }));
+
+    return [...mappedProofs, ...xenditVirtualProofs];
   };
 
   approvePaymentProof = async (
@@ -697,13 +1026,6 @@ export class BookingService {
       );
     }
 
-    if (booking.status !== OrderStatus.SELESAI) {
-      throw new ApiError(
-        "Review hanya bisa diberikan saat booking sudah selesai.",
-        400,
-      );
-    }
-
     const now = new Date();
     if (now < booking.checkOut) {
       throw new ApiError(
@@ -712,25 +1034,108 @@ export class BookingService {
       );
     }
 
+    if (booking.status !== OrderStatus.SELESAI) {
+      if (booking.status === OrderStatus.DIPROSES) {
+        await this.prisma.booking.update({
+          where: { id: bookingId },
+          data: {
+            status: OrderStatus.SELESAI,
+          },
+        });
+      } else {
+        throw new ApiError(
+          "Review hanya bisa diberikan saat booking sudah selesai.",
+          400,
+        );
+      }
+    }
+
     const comment = dto.comment.trim();
     if (!comment) {
       throw new ApiError("Komentar review wajib diisi.", 400);
     }
 
-    const created = await this.prisma.review.create({
-      data: {
-        bookingId,
-        rating: dto.rating,
-        comment,
-      },
-      select: {
-        id: true,
-        bookingId: true,
-        rating: true,
-        comment: true,
-        createdAt: true,
-      },
-    });
+    const timestamp = new Date();
+    let created: {
+      id: string;
+      bookingId: string;
+      rating: number;
+      comment: string;
+      createdAt: Date;
+    };
+
+    try {
+      created = await this.prisma.review.create({
+        data: {
+          bookingId,
+          rating: dto.rating,
+          comment,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        select: {
+          id: true,
+          bookingId: true,
+          rating: true,
+          comment: true,
+          createdAt: true,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2011"
+      ) {
+        const legacyRows = await this.prisma.$queryRaw<
+          Array<{
+            id: string;
+            booking_id: string;
+            rating: number;
+            comment: string;
+            created_at: Date;
+          }>
+        >`
+          INSERT INTO reviews (
+            booking_id,
+            property_id,
+            room_type_id,
+            user_id,
+            tenant_id,
+            rating,
+            comment,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${bookingId}::uuid,
+            ${booking.propertyId}::uuid,
+            ${booking.roomTypeId}::uuid,
+            ${booking.userId}::uuid,
+            ${booking.tenantId}::uuid,
+            ${dto.rating},
+            ${comment},
+            ${timestamp},
+            ${timestamp}
+          )
+          RETURNING id, booking_id, rating, comment, created_at
+        `;
+
+        const legacyCreated = legacyRows[0];
+        if (!legacyCreated) {
+          throw new ApiError("Gagal menyimpan review.", 500);
+        }
+
+        created = {
+          id: legacyCreated.id,
+          bookingId: legacyCreated.booking_id,
+          rating: Number(legacyCreated.rating),
+          comment: legacyCreated.comment,
+          createdAt: legacyCreated.created_at,
+        };
+      } else {
+        throw error;
+      }
+    }
 
     return {
       message: "Review berhasil dikirim.",
@@ -1193,6 +1598,97 @@ export class BookingService {
 
   private generateOrderNo() {
     return `ORD-${Date.now()}-${crypto.randomInt(1000, 9999)}`;
+  }
+
+  private async createGatewayInvoice(payload: {
+    bookingId: string;
+    orderNo: string;
+    amount: string;
+    userEmail: string;
+  }) {
+    const parsedAmount = Number(payload.amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      throw new ApiError("Total booking tidak valid.", 400);
+    }
+
+    const safeBaseUrl = APP_BASE_URL.replace(/\/$/, "");
+    const successRedirectUrl = `${safeBaseUrl}/my-transaction?orderNo=${encodeURIComponent(payload.orderNo)}`;
+    const failureRedirectUrl = `${safeBaseUrl}/payment?bookingId=${encodeURIComponent(payload.bookingId)}`;
+
+    return createXenditInvoice({
+      externalId: payload.bookingId,
+      amount: parsedAmount,
+      payerEmail: payload.userEmail,
+      description: `Pembayaran booking ${payload.orderNo}`,
+      successRedirectUrl,
+      failureRedirectUrl,
+    });
+  }
+
+  private async cancelPendingBookingBySystem(bookingId: string) {
+    await this.prisma.$transaction((tx) =>
+      this.cancelBookingWithInventoryRestore(tx, bookingId, CancelledBy.SYSTEM),
+    );
+  }
+
+  private async confirmXenditBookingPayment(bookingId: string, paidAt: Date) {
+    const updated = await this.prisma.booking.updateMany({
+      where: {
+        id: bookingId,
+        paymentMethod: PaymentMethod.XENDIT,
+        status: OrderStatus.MENUNGGU_PEMBAYARAN,
+        paymentConfirmedAt: null,
+      },
+      data: {
+        status: OrderStatus.DIPROSES,
+        paymentConfirmedAt: paidAt,
+        xenditInvoiceStatus: "PAID",
+      },
+    });
+
+    if (updated.count === 0) {
+      return {
+        message: "Webhook Xendit diterima.",
+        bookingId,
+        confirmed: false,
+      };
+    }
+
+    let receiptEmailSent = false;
+    try {
+      await this.sendApprovedBookingReceiptEmail({
+        bookingId,
+        approvedAt: paidAt,
+        paymentMethod: PaymentMethod.XENDIT,
+        reviewNotes: null,
+      });
+      receiptEmailSent = true;
+    } catch (error) {
+      console.error(
+        `[BookingService] Failed to send Xendit booking receipt email for booking ${bookingId}.`,
+        error,
+      );
+    }
+
+    return {
+      message: "Pembayaran Xendit berhasil dikonfirmasi otomatis.",
+      bookingId,
+      confirmed: true,
+      receiptEmailSent,
+    };
+  }
+
+  private normalizeWebhookText(value: unknown) {
+    if (typeof value !== "string") return null;
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private parseWebhookDate(value: unknown) {
+    if (typeof value !== "string") return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
   }
 
   private async sendApprovedBookingReceiptEmail(payload: {

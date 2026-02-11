@@ -259,6 +259,21 @@ If your commit message doesn't follow the conventional format, the commit will b
 - Used by `docker-compose.prod.yml`
 - Runs on default PostgreSQL port inside Docker network
 
+## Xendit Payment Gateway Setup
+
+Tambahkan environment variable berikut di backend:
+
+```env
+XENDIT_SECRET_KEY=your_xendit_secret_key
+XENDIT_CALLBACK_TOKEN=your_xendit_callback_token
+XENDIT_API_BASE_URL=https://api.xendit.co
+XENDIT_INVOICE_EXPIRY_MINUTES=30
+```
+
+Konfigurasikan webhook URL di dashboard Xendit ke endpoint:
+
+`POST /bookings/payment-gateway/xendit/webhook`
+
 ## Security Notes
 
 ⚠️ **Important Security Practices:**

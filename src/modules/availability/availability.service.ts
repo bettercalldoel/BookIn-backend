@@ -1,5 +1,6 @@
 import {
   AdjustmentType,
+  OrderStatus,
   Prisma,
   PrismaClient,
   RateScope,
@@ -177,6 +178,15 @@ export class AvailabilityService {
       throw new ApiError("Tanggal tidak boleh kosong.", 400);
     }
 
+    const paidBookingSummaryByDate =
+      body.isClosed || (!body.isClosed && body.availableUnits !== undefined)
+        ? await this.getPaidBookingSummaryByDate(roomTypeId, dates)
+        : new Map<string, { soldRooms: number; orderNos: Set<string> }>();
+
+    if (body.isClosed) {
+      this.ensureNoPaidBookingsOnDates(paidBookingSummaryByDate);
+    }
+
     if (!body.isClosed && body.availableUnits !== undefined) {
       if (body.availableUnits <= 0) {
         throw new ApiError("Jumlah unit harus lebih dari 0.", 400);
@@ -195,6 +205,13 @@ export class AvailabilityService {
       body.availableUnits > roomType.totalUnits
     ) {
       throw new ApiError("Jumlah unit melebihi total unit room.", 400);
+    }
+
+    if (!body.isClosed && body.availableUnits !== undefined) {
+      this.ensureAvailableUnitsNotBelowPaidRooms(
+        body.availableUnits,
+        paidBookingSummaryByDate,
+      );
     }
 
     const existingEntries = await this.prisma.roomTypeCalendar.findMany({
@@ -268,6 +285,106 @@ export class AvailabilityService {
       totalDates: dates.length,
     };
   };
+
+  private ensureNoPaidBookingsOnDates(
+    paidBookingSummaryByDate: Map<
+      string,
+      { soldRooms: number; orderNos: Set<string> }
+    >,
+  ) {
+    if (paidBookingSummaryByDate.size === 0) {
+      return;
+    }
+
+    const summary = Array.from(paidBookingSummaryByDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, payload]) => {
+        const orders = Array.from(payload.orderNos);
+        const preview = orders.slice(0, 2).join(", ");
+        const tail = orders.length > 2 ? ` +${orders.length - 2} lainnya` : "";
+        return `${date} (${preview}${tail})`;
+      })
+      .join(", ");
+
+    throw new ApiError(
+      `Tanggal ${summary} tidak bisa ditutup karena sudah ada transaksi terbayar.`,
+      400,
+    );
+  }
+
+  private ensureAvailableUnitsNotBelowPaidRooms(
+    requestedAvailableUnits: number,
+    paidBookingSummaryByDate: Map<
+      string,
+      { soldRooms: number; orderNos: Set<string> }
+    >,
+  ) {
+    if (paidBookingSummaryByDate.size === 0) {
+      return;
+    }
+
+    const conflicts = Array.from(paidBookingSummaryByDate.entries())
+      .filter(([, payload]) => requestedAvailableUnits < payload.soldRooms)
+      .sort(([a], [b]) => a.localeCompare(b));
+
+    if (conflicts.length === 0) {
+      return;
+    }
+
+    const summary = conflicts
+      .map(([date, payload]) => {
+        const orders = Array.from(payload.orderNos);
+        const preview = orders.slice(0, 2).join(", ");
+        const tail = orders.length > 2 ? ` +${orders.length - 2} lainnya` : "";
+        return `${date} (${payload.soldRooms} terjual; ${preview}${tail})`;
+      })
+      .join(", ");
+
+    throw new ApiError(
+      `Jumlah unit tersedia (${requestedAvailableUnits}) tidak boleh lebih kecil dari kamar terjual pada tanggal ${summary}.`,
+      400,
+    );
+  }
+
+  private async getPaidBookingSummaryByDate(roomTypeId: string, dates: Date[]) {
+    const paidBookingNights = await this.prisma.bookingNight.findMany({
+      where: {
+        stayDate: { in: dates },
+        booking: {
+          roomTypeId,
+          status: {
+            in: [OrderStatus.DIPROSES, OrderStatus.SELESAI],
+          },
+        },
+      },
+      select: {
+        stayDate: true,
+        booking: {
+          select: {
+            orderNo: true,
+            rooms: true,
+          },
+        },
+      },
+    });
+
+    const conflictMap = new Map<
+      string,
+      { soldRooms: number; orderNos: Set<string> }
+    >();
+    paidBookingNights.forEach((item) => {
+      const dateKey = this.toDateKey(item.stayDate);
+      const current = conflictMap.get(dateKey) ?? {
+        soldRooms: 0,
+        orderNos: new Set<string>(),
+      };
+      current.soldRooms += item.booking.rooms;
+      current.orderNos.add(item.booking.orderNo);
+      conflictMap.set(dateKey, current);
+    });
+
+    return conflictMap;
+  }
 
   createRateRule = async (tenantAccountId: string, body: CreateRateRuleDTO) => {
     const name = body.name.trim();

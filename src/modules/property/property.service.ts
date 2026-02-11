@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { ApiError } from "../../utils/api-error.js";
 import { CreatePropertyDTO } from "./dto/create-property.dto.js";
 import { UpdatePropertyDTO } from "./dto/update-property.dto.js";
@@ -10,6 +10,23 @@ const MAX_GALLERY_IMAGES = 5;
 
 export class PropertyService {
   constructor(private prisma: PrismaClient) {}
+
+  listPublicCategories = async () => {
+    const categories = await this.prisma.propertyCategory.findMany({
+      where: {
+        isActive: true,
+      },
+      distinct: ["name"],
+      orderBy: { name: "asc" },
+      select: {
+        name: true,
+      },
+    });
+
+    return categories.map((category) => ({
+      name: category.name,
+    }));
+  };
 
   listPublicProperties = async (query: SearchPropertyQueryDTO) => {
     const startDateRaw = query.start_date;
@@ -37,6 +54,8 @@ export class PropertyService {
 
     const stayDates =
       startDate && endDate ? this.buildStayDates(startDate, endDate) : [];
+    const availabilityCheckDates =
+      stayDates.length > 0 ? stayDates : [this.getTodayUtcDate()];
 
     const rawPage = Number(query.page ?? 1);
     const rawLimit = Number(query.limit ?? 8);
@@ -46,121 +65,203 @@ export class PropertyService {
     const skip = (page - 1) * limit;
 
     const locTerm = query.loc_term?.trim();
+    const propertyName = query.property_name?.trim();
+    const category = query.category?.trim();
+    const sortBy = query.sort_by ?? "name";
+    const sortOrder = query.sort_order ?? "asc";
 
-    const where =
-      locTerm && locTerm.length > 0
-        ? {
-            OR: [
-              { name: { contains: locTerm, mode: "insensitive" as const } },
-              {
-                address: { contains: locTerm, mode: "insensitive" as const },
-              },
-              {
-                city: {
-                  name: { contains: locTerm, mode: "insensitive" as const },
-                },
-              },
-              {
-                city: {
-                  provinceName: {
-                    contains: locTerm,
-                    mode: "insensitive" as const,
-                  },
-                },
-              },
-              {
-                city: {
-                  province: {
-                    name: { contains: locTerm, mode: "insensitive" as const },
-                  },
-                },
-              },
-            ],
-          }
-        : {};
+    const whereAnd: Prisma.PropertyWhereInput[] = [];
 
-    const [data, total] = await this.prisma.$transaction([
-      this.prisma.property.findMany({
-        where,
-        skip,
-        take: limit,
-        include: {
-          images: { orderBy: { sortOrder: "asc" } },
-          city: {
-            select: {
-              name: true,
-              provinceName: true,
-              province: { select: { name: true } },
+    if (locTerm) {
+      whereAnd.push({
+        OR: [
+          { name: { contains: locTerm, mode: "insensitive" } },
+          { address: { contains: locTerm, mode: "insensitive" } },
+          {
+            city: {
+              name: { contains: locTerm, mode: "insensitive" },
             },
           },
-          roomTypes: {
-            select: {
-              basePrice: true,
-              totalUnits: true,
-              maxGuests: true,
-              calendar: stayDates.length
-                ? {
-                    where: {
-                      date: { in: stayDates },
-                    },
-                  }
-                : false,
+          {
+            city: {
+              provinceName: { contains: locTerm, mode: "insensitive" },
+            },
+          },
+          {
+            city: {
+              province: {
+                name: { contains: locTerm, mode: "insensitive" },
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    if (propertyName) {
+      whereAnd.push({
+        name: {
+          contains: propertyName,
+          mode: "insensitive",
+        },
+      });
+    }
+
+    if (category) {
+      whereAnd.push({
+        category: {
+          name: {
+            contains: category,
+            mode: "insensitive",
+          },
+        },
+      });
+    }
+
+    whereAnd.push({
+      roomTypes: {
+        some: {
+          ...(totalGuests > 0 ? { maxGuests: { gte: totalGuests } } : {}),
+          totalUnits: { gte: requiredRooms },
+        },
+      },
+    });
+
+    const where: Prisma.PropertyWhereInput =
+      whereAnd.length > 0 ? { AND: whereAnd } : {};
+
+    const data = await this.prisma.property.findMany({
+      where,
+      include: {
+        images: { orderBy: { sortOrder: "asc" } },
+        category: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        city: {
+          select: {
+            name: true,
+            provinceName: true,
+            province: { select: { name: true } },
+          },
+        },
+        roomTypes: {
+          select: {
+            id: true,
+            basePrice: true,
+            totalUnits: true,
+            maxGuests: true,
+            calendar: {
+              where: {
+                date: { in: availabilityCheckDates },
+              },
+              select: {
+                date: true,
+                availableUnits: true,
+                price: true,
+                isClosed: true,
+              },
             },
           },
         },
-        orderBy: { createdAt: "desc" },
-      }),
-      this.prisma.property.count({ where }),
-    ]);
-
-    const items = data.map((property) => {
-      const availableRooms = property.roomTypes.filter((room) => {
-        if (totalGuests > 0 && room.maxGuests < totalGuests) return false;
-        if (stayDates.length === 0) return true;
-
-        const calendarMap = new Map(
-          (room.calendar ?? []).map((entry) => [
-            this.toDateKey(entry.date),
-            entry,
-          ]),
-        );
-
-        return stayDates.every((date) => {
-          const entry = calendarMap.get(this.toDateKey(date));
-          if (entry?.isClosed) return false;
-          const availableUnits = entry?.availableUnits ?? room.totalUnits;
-          return availableUnits >= requiredRooms;
-        });
-      });
-
-      const prices = availableRooms.map((room) => Number(room.basePrice));
-      const minPrice =
-        prices.length > 0 ? Math.min(...prices).toString() : null;
-      return {
-        id: property.id,
-        name: property.name,
-        address: property.address,
-        city: property.city?.name ?? null,
-        province:
-          property.city?.province?.name ?? property.city?.provinceName ?? null,
-        coverUrl: property.images[0]?.url ?? null,
-        minPrice,
-      };
+      },
     });
 
-    const filteredItems = items.filter((item) => item.minPrice !== null);
-    const shouldFilterByAvailability = stayDates.length > 0 || totalGuests > 0;
-    const totalCount = shouldFilterByAvailability
-      ? filteredItems.length
-      : total;
+    const items = data
+      .map((property) => {
+        const availableRoomPrices = property.roomTypes
+          .filter((room) => {
+            if (totalGuests > 0 && room.maxGuests < totalGuests) return false;
+            if (room.totalUnits < requiredRooms) return false;
+
+            const calendarMap = new Map(
+              room.calendar.map((entry) => [this.toDateKey(entry.date), entry]),
+            );
+
+            return availabilityCheckDates.every((date) => {
+              const entry = calendarMap.get(this.toDateKey(date));
+              if (entry?.isClosed) return false;
+              const availableUnits = entry?.availableUnits ?? room.totalUnits;
+              return availableUnits >= requiredRooms;
+            });
+          })
+          .map((room) => {
+            const calendarMap = new Map(
+              room.calendar.map((entry) => [this.toDateKey(entry.date), entry]),
+            );
+            const nightlyPrices = availabilityCheckDates.map((date) => {
+              const entry = calendarMap.get(this.toDateKey(date));
+              return Number(entry?.price ?? room.basePrice);
+            });
+            return Math.min(...nightlyPrices);
+          })
+          .filter((price) => Number.isFinite(price));
+
+        const minPrice =
+          availableRoomPrices.length > 0
+            ? Math.min(...availableRoomPrices)
+            : null;
+
+        return {
+          id: property.id,
+          name: property.name,
+          address: property.address,
+          city: property.city?.name ?? null,
+          province:
+            property.city?.province?.name ??
+            property.city?.provinceName ??
+            null,
+          categoryId: property.category?.id?.toString() ?? null,
+          categoryName: property.category?.name ?? null,
+          coverUrl: property.images[0]?.url ?? null,
+          minPrice: minPrice !== null ? String(minPrice) : null,
+          __sortPrice: minPrice ?? Number.POSITIVE_INFINITY,
+        };
+      })
+      .filter((item) => item.minPrice !== null);
+
+    const sortedItems = items.sort((a, b) => {
+      if (sortBy === "price") {
+        const diff = a.__sortPrice - b.__sortPrice;
+        if (diff !== 0) return sortOrder === "asc" ? diff : -diff;
+        const nameCompare = a.name.localeCompare(b.name, "id-ID");
+        return sortOrder === "asc" ? nameCompare : -nameCompare;
+      }
+
+      const nameCompare = a.name.localeCompare(b.name, "id-ID");
+      if (nameCompare !== 0) {
+        return sortOrder === "asc" ? nameCompare : -nameCompare;
+      }
+      const priceCompare = a.__sortPrice - b.__sortPrice;
+      return sortOrder === "asc" ? priceCompare : -priceCompare;
+    });
+
+    const total = sortedItems.length;
+    const pagedItems = sortedItems
+      .slice(skip, skip + limit)
+      .map(({ __sortPrice, ...item }) => item);
+
+    const categories = Array.from(
+      sortedItems.reduce((map, item) => {
+        if (!item.categoryName) return map;
+        const current = map.get(item.categoryName) ?? 0;
+        map.set(item.categoryName, current + 1);
+        return map;
+      }, new Map<string, number>()),
+    )
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, "id-ID"));
 
     return {
-      data: filteredItems,
+      data: pagedItems,
       meta: {
         page,
         limit,
-        total: totalCount,
-        totalPages: Math.ceil(totalCount / limit) || 1,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        categories,
       },
     };
   };
@@ -597,6 +698,13 @@ export class PropertyService {
 
   private toDateKey(date: Date) {
     return date.toISOString().slice(0, 10);
+  }
+
+  private getTodayUtcDate() {
+    const now = new Date();
+    return new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    );
   }
 
   private parseInt(value: string, message: string) {
