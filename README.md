@@ -75,7 +75,7 @@ NODE_ENV=production
 PORT=8000
 
 # DB
-POSTGRES_PASSWORD=yourpass
+POSTGRES_LOCAL_PASSWORD=yourpass
 DATABASE_URL="postgresql://postgres:yourpass@postgres:5432/postgres"
 ```
 
@@ -84,6 +84,7 @@ DATABASE_URL="postgresql://postgres:yourpass@postgres:5432/postgres"
 - Replace `yourpass` with a strong, secure password
 - The production environment uses `postgres` as the hostname (Docker service name)
 - The production database runs on the default PostgreSQL port `5432` inside the Docker network
+- If you change `POSTGRES_LOCAL_PASSWORD` after the DB was created, clear old data first (`npm run docker-prod:down` then remove `docker/prod/postgres`).
 
 ### 4. Set Up the Database
 
@@ -120,6 +121,12 @@ npm run dev
 ```
 
 The server will start on `http://localhost:8000` (or the port specified in your `.env` file).
+
+If your `.env` points to a remote database (for example Supabase), use this command to force local Docker Postgres:
+
+```bash
+npm run dev:local-db
+```
 
 ### Production Mode (Local Build)
 
@@ -230,12 +237,56 @@ git commit -m "refactor: simplify validation middleware"
 
 If your commit message doesn't follow the conventional format, the commit will be rejected by Husky's commit-msg hook.
 
+## Testing
+
+### Unit Test
+
+Jalankan test non-integration (tidak butuh database):
+
+```bash
+npm test
+```
+
+### Integration Test (Real DB)
+
+Integration test akan menulis dan menghapus data test di database, jadi jalankan pada environment development.
+
+Prasyarat:
+
+```bash
+npm run docker-dev:up
+```
+
+Jalankan integration test:
+
+```bash
+npm run test:integration
+```
+
+Catatan:
+
+- Integration test membaca `DATABASE_URL` (contoh lokal: `postgresql://postgres:admin@localhost:6543/postgres`)
+- Data test menggunakan prefix unik dan dibersihkan setelah test selesai.
+
+### Sinkronisasi Data Remote -> Local Dev
+
+Kalau data di Prisma Studio (remote) berbeda dengan data saat backend lokal berjalan, sinkronkan dulu ke DB Docker dev:
+
+```bash
+npm run docker-dev:up
+npm run db:sync:dev
+```
+
 ## Available Scripts
 
 - `npm run build` - Compile TypeScript to JavaScript
+- `npm test` - Run non-integration tests
+- `npm run test:integration` - Run integration tests against real database
 - `npm run start` - Start the production server
 - `npm run dev` - Start the development server with hot-reload
+- `npm run dev:local-db` - Start dev server forced to local Docker PostgreSQL (`localhost:6543`)
 - `npm run db:deploy` - Run Prisma migrations and generate client
+- `npm run db:sync:dev` - Sync data from remote DB (`.env.prod`) to local dev container (`postgres_container_dev`)
 - `npm run docker-dev:up` - Start Docker development environment
 - `npm run docker-dev:down` - Stop Docker development environment
 - `npm run docker-prod:up` - Build and start Docker production environment
@@ -255,9 +306,10 @@ If your commit message doesn't follow the conventional format, the commit will b
 ### Production (`.env.prod`)
 
 - Uses `postgres:5432` as the database host (Docker service name)
-- Requires `POSTGRES_PASSWORD` for the PostgreSQL container
+- Requires `POSTGRES_LOCAL_PASSWORD` for the PostgreSQL container
 - Used by `docker-compose.prod.yml`
 - Runs on default PostgreSQL port inside Docker network
+- In `docker-compose.prod.yml`, app DB URL is built from `POSTGRES_LOCAL_PASSWORD` to avoid conflict with other `DATABASE_URL` values.
 
 ## Xendit Payment Gateway Setup
 
@@ -273,6 +325,85 @@ XENDIT_INVOICE_EXPIRY_MINUTES=30
 Konfigurasikan webhook URL di dashboard Xendit ke endpoint:
 
 `POST /bookings/payment-gateway/xendit/webhook`
+
+## Tenant Sales Report API
+
+Endpoint:
+
+`GET /bookings/tenant/reports/sales`
+
+Autentikasi:
+
+- Wajib login tenant (`Authorization: Bearer <token>`)
+
+Query parameters:
+
+- `view`: `transaction | property | user` (default: `transaction`)
+- `sortBy`: `date | total` (default: `date`)
+- `sortOrder`: `asc | desc` (default: `desc`)
+- `startDate`: `YYYY-MM-DD` (opsional)
+- `endDate`: `YYYY-MM-DD` (opsional)
+- `keyword`: string (opsional)
+- `page`: integer >= 1 (default: `1`)
+- `limit`: integer >= 1 (max: `100`, default: `10`)
+
+Contoh request:
+
+```bash
+GET /bookings/tenant/reports/sales?view=property&sortBy=total&sortOrder=desc&startDate=2026-01-01&endDate=2026-01-31&page=1&limit=10
+```
+
+Contoh response ringkas:
+
+```json
+{
+  "data": [
+    {
+      "propertyId": "7f2f6d15-2e32-4b79-95aa-09f9fcbf9f5c",
+      "propertyName": "Villa Merapi",
+      "transactions": 12,
+      "users": 8,
+      "totalSales": 12800000,
+      "latestTransactionAt": "2026-01-31T14:22:10.000Z"
+    }
+  ],
+  "summary": {
+    "totalSales": 25600000,
+    "totalTransactions": 27,
+    "avgPerTransaction": 948148
+  },
+  "trend": [
+    { "month": "Aug 25", "sales": 0, "bookings": 0 },
+    { "month": "Sep 25", "sales": 0, "bookings": 0 },
+    { "month": "Oct 25", "sales": 1200000, "bookings": 2 },
+    { "month": "Nov 25", "sales": 2800000, "bookings": 4 },
+    { "month": "Dec 25", "sales": 4200000, "bookings": 6 },
+    { "month": "Jan 26", "sales": 17400000, "bookings": 15 },
+    { "month": "Feb 26", "sales": 0, "bookings": 0 }
+  ],
+  "meta": {
+    "page": 1,
+    "limit": 10,
+    "total": 5,
+    "totalPages": 1,
+    "hasNext": false,
+    "hasPrev": false,
+    "view": "property",
+    "sortBy": "total",
+    "sortOrder": "desc",
+    "startDate": "2026-01-01",
+    "endDate": "2026-01-31",
+    "keyword": null
+  }
+}
+```
+
+Catatan:
+
+- Data sales hanya menghitung booking dengan pembayaran terkonfirmasi:
+  - `MANUAL_TRANSFER` + payment proof `APPROVED`
+  - `XENDIT` dengan `xenditInvoiceStatus = PAID` atau `paymentConfirmedAt` terisi
+- Booking `DIBATALKAN` tetap bisa muncul sebagai transaksi, tapi tidak dihitung ke revenue.
 
 ## Security Notes
 

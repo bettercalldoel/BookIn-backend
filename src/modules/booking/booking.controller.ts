@@ -8,6 +8,8 @@ import { ReviewPaymentProofDTO } from "./dto/review-payment-proof.dto.js";
 import { CreateReviewDTO } from "./dto/create-review.dto.js";
 import { ReplyReviewDTO } from "./dto/reply-review.dto.js";
 import { ListTenantReviewDTO } from "./dto/list-tenant-review.dto.js";
+import { ListBookingOptionDTO } from "./dto/list-booking-option.dto.js";
+import { ListTenantSalesReportDTO } from "./dto/list-tenant-sales-report.dto.js";
 import { ApiError } from "../../utils/api-error.js";
 
 const resolveUserId = (req: Request) => {
@@ -64,8 +66,10 @@ export class BookingController {
     res.status(200).json(result);
   };
 
-  options = async (_req: Request, res: Response) => {
-    const result = await this.bookingService.listOptions();
+  options = async (req: Request, res: Response) => {
+    const result = await this.bookingService.listOptions(
+      req.query as unknown as ListBookingOptionDTO,
+    );
     res.status(200).json(result);
   };
 
@@ -127,6 +131,18 @@ export class BookingController {
     const result = await this.bookingService.listTenantPaymentProofs(
       tenantAccountId,
       req.query as unknown as ListTenantPaymentProofDTO,
+    );
+
+    res.status(200).json(result);
+  };
+
+  listTenantSalesReport = async (req: Request, res: Response) => {
+    const tenantAccountId = resolveUserId(req);
+    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
+
+    const result = await this.bookingService.listTenantSalesReport(
+      tenantAccountId,
+      req.query as unknown as ListTenantSalesReportDTO,
     );
 
     res.status(200).json(result);

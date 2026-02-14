@@ -25,6 +25,13 @@ import { ReviewPaymentProofDTO } from "./dto/review-payment-proof.dto.js";
 import { CreateReviewDTO } from "./dto/create-review.dto.js";
 import { ReplyReviewDTO } from "./dto/reply-review.dto.js";
 import { ListTenantReviewDTO } from "./dto/list-tenant-review.dto.js";
+import { ListBookingOptionDTO } from "./dto/list-booking-option.dto.js";
+import {
+  ListTenantSalesReportDTO,
+  TenantSalesReportSortBy,
+  TenantSalesReportSortOrder,
+  TenantSalesReportView,
+} from "./dto/list-tenant-sales-report.dto.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -59,6 +66,9 @@ type XenditInvoiceWebhookPayload = {
   status?: unknown;
   paid_at?: unknown;
 };
+
+type DecimalLike = Prisma.Decimal | number | string | null;
+type IntegerLike = bigint | number | string | null;
 
 const DATE_FORMAT_ERROR = "Tanggal harus berformat YYYY-MM-DD.";
 const PAYMENT_PROOF_UPLOAD_TTL_MINUTES = 30;
@@ -310,38 +320,62 @@ export class BookingService {
     };
   };
 
-  listOptions = async () => {
-    const properties = await this.prisma.property.findMany({
-      orderBy: { createdAt: "desc" },
-      include: {
-        city: {
-          select: {
-            name: true,
-            provinceName: true,
-            province: { select: { name: true } },
+  listOptions = async (dto: ListBookingOptionDTO) => {
+    const parsedPage = Number(dto.page);
+    const parsedLimit = Number(dto.limit);
+    const page =
+      Number.isFinite(parsedPage) && parsedPage >= 1 ? parsedPage : 1;
+    const limit =
+      Number.isFinite(parsedLimit) && parsedLimit >= 1
+        ? Math.min(parsedLimit, 100)
+        : 20;
+
+    const [properties, total] = await this.prisma.$transaction([
+      this.prisma.property.findMany({
+        orderBy: { createdAt: "desc" },
+        include: {
+          city: {
+            select: {
+              name: true,
+              provinceName: true,
+              province: { select: { name: true } },
+            },
+          },
+          roomTypes: {
+            orderBy: { createdAt: "asc" },
           },
         },
-        roomTypes: {
-          orderBy: { createdAt: "asc" },
-        },
-      },
-    });
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.property.count(),
+    ]);
 
-    return properties.map((property) => ({
-      id: property.id,
-      name: property.name,
-      address: property.address,
-      city: property.city?.name ?? null,
-      province:
-        property.city?.province?.name ?? property.city?.provinceName ?? null,
-      roomTypes: property.roomTypes.map((room) => ({
-        id: room.id,
-        name: room.name,
-        basePrice: room.basePrice.toString(),
-        totalUnits: room.totalUnits,
-        maxGuests: room.maxGuests,
+    return {
+      data: properties.map((property) => ({
+        id: property.id,
+        name: property.name,
+        address: property.address,
+        city: property.city?.name ?? null,
+        province:
+          property.city?.province?.name ?? property.city?.provinceName ?? null,
+        roomTypes: property.roomTypes.map((room) => ({
+          id: room.id,
+          name: room.name,
+          basePrice: room.basePrice.toString(),
+          totalUnits: room.totalUnits,
+          maxGuests: room.maxGuests,
+        })),
       })),
-    }));
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        hasNext: page * limit < total,
+        hasPrev: page > 1,
+      },
+    };
   };
 
   cancelByUser = async (
@@ -476,11 +510,14 @@ export class BookingService {
     callbackToken: string | undefined,
     payload: XenditInvoiceWebhookPayload,
   ) => {
-    if (!XENDIT_CALLBACK_TOKEN) {
+    const expectedToken = this.normalizeCallbackToken(XENDIT_CALLBACK_TOKEN);
+    const incomingToken = this.normalizeCallbackToken(callbackToken);
+
+    if (!expectedToken) {
       throw new ApiError("Xendit callback token belum dikonfigurasi.", 500);
     }
 
-    if (!callbackToken || callbackToken !== XENDIT_CALLBACK_TOKEN) {
+    if (!incomingToken || incomingToken !== expectedToken) {
       throw new ApiError("Invalid callback token.", 401);
     }
 
@@ -892,6 +929,413 @@ export class BookingService {
     }));
 
     return [...mappedProofs, ...xenditVirtualProofs];
+  };
+
+  listTenantSalesReport = async (
+    tenantAccountId: string,
+    dto: ListTenantSalesReportDTO,
+  ) => {
+    const parsedPage = Number(dto.page);
+    const parsedLimit = Number(dto.limit);
+    const page =
+      Number.isFinite(parsedPage) && parsedPage >= 1 ? parsedPage : 1;
+    const limit =
+      Number.isFinite(parsedLimit) && parsedLimit >= 1
+        ? Math.min(parsedLimit, 100)
+        : 10;
+    const skip = (page - 1) * limit;
+
+    const view: TenantSalesReportView = dto.view ?? "transaction";
+    const sortBy: TenantSalesReportSortBy = dto.sortBy ?? "date";
+    const sortOrder: TenantSalesReportSortOrder = dto.sortOrder ?? "desc";
+    const keywordRaw = dto.keyword?.trim() ?? "";
+    const keyword = keywordRaw ? `%${keywordRaw}%` : null;
+
+    const startDate = dto.startDate
+      ? this.parseDate(dto.startDate, "Tanggal mulai")
+      : null;
+    const endDate = dto.endDate
+      ? this.parseDate(dto.endDate, "Tanggal akhir")
+      : null;
+
+    if (startDate && endDate && endDate < startDate) {
+      throw new ApiError("Tanggal akhir harus setelah tanggal mulai.", 400);
+    }
+
+    const startBoundary = startDate ? this.startOfDayUTC(startDate) : null;
+    const endBoundary = endDate ? this.endOfDayUTC(endDate) : null;
+
+    const dateFilters: Prisma.Sql[] = [];
+    if (startBoundary) {
+      dateFilters.push(Prisma.sql`pb.transaction_date >= ${startBoundary}`);
+    }
+    if (endBoundary) {
+      dateFilters.push(Prisma.sql`pb.transaction_date <= ${endBoundary}`);
+    }
+
+    const dateFilterSql =
+      dateFilters.length > 0
+        ? Prisma.sql`${Prisma.join(dateFilters, " AND ")}`
+        : Prisma.sql`TRUE`;
+
+    const keywordFilterSql = this.buildSalesKeywordFilter(view, keyword);
+    const ctesSql = Prisma.sql`
+      WITH paid_bookings AS (
+        SELECT
+          b.id,
+          b.order_no,
+          b.check_in,
+          b.check_out,
+          b.status,
+          b.total_amount,
+          b.property_id,
+          p.name AS property_name,
+          b.user_id,
+          COALESCE(NULLIF(up.full_name, ''), a.email) AS user_name,
+          COALESCE(b.payment_confirmed_at, b.created_at) AS transaction_date
+        FROM bookings b
+        JOIN properties p ON p.id = b.property_id
+        JOIN accounts a ON a.id = b.user_id
+        LEFT JOIN user_profiles up ON up.account_id = a.id
+        WHERE
+          b.tenant_id = ${tenantAccountId}
+          AND (
+            (
+              b.payment_method = ${PaymentMethod.MANUAL_TRANSFER}::payment_method
+              AND EXISTS (
+                SELECT 1
+                FROM payment_proofs pp
+                WHERE pp.booking_id = b.id
+                  AND pp.status = ${PaymentProofStatus.APPROVED}::payment_proof_status
+              )
+            )
+            OR (
+              b.payment_method = ${PaymentMethod.XENDIT}::payment_method
+              AND (
+                b.payment_confirmed_at IS NOT NULL
+                OR UPPER(COALESCE(b.xendit_invoice_status, '')) = 'PAID'
+              )
+            )
+          )
+      ),
+      filtered_bookings AS (
+        SELECT *
+        FROM paid_bookings pb
+        WHERE ${dateFilterSql}
+          AND ${keywordFilterSql}
+      )
+    `;
+
+    let data: Array<Record<string, unknown>> = [];
+    let total = 0;
+
+    if (view === "transaction") {
+      const orderBySql = this.buildSalesTransactionOrderBy(sortBy, sortOrder);
+      const rows = await this.prisma.$queryRaw<
+        Array<{
+          id: string;
+          orderNo: string;
+          submittedAt: Date | string;
+          checkIn: Date | string;
+          propertyId: string;
+          property: string;
+          userId: string;
+          user: string;
+          status: OrderStatus;
+          total: DecimalLike;
+        }>
+      >(Prisma.sql`
+        ${ctesSql}
+        SELECT
+          fb.id,
+          fb.order_no AS "orderNo",
+          fb.transaction_date AS "submittedAt",
+          fb.check_in AS "checkIn",
+          fb.property_id AS "propertyId",
+          fb.property_name AS property,
+          fb.user_id AS "userId",
+          fb.user_name AS "user",
+          fb.status,
+          fb.total_amount AS total
+        FROM filtered_bookings fb
+        ${orderBySql}
+        LIMIT ${limit}
+        OFFSET ${skip}
+      `);
+
+      const [countRow] = await this.prisma.$queryRaw<
+        Array<{ total: IntegerLike }>
+      >(Prisma.sql`
+        ${ctesSql}
+        SELECT COUNT(*)::bigint AS total
+        FROM filtered_bookings
+      `);
+
+      total = this.parseIntegerLike(countRow?.total);
+      data = rows.map((row) => ({
+        id: row.id,
+        orderNo: row.orderNo,
+        submittedAt: this.toISOStringSafe(row.submittedAt),
+        checkIn: this.toDateOnlyStringSafe(row.checkIn),
+        propertyId: row.propertyId,
+        property: row.property,
+        userId: row.userId,
+        user: row.user,
+        status: row.status,
+        total: this.decimalLikeToNumber(row.total),
+      }));
+    }
+
+    if (view === "property") {
+      const orderBySql = this.buildSalesAggregateOrderBy(sortBy, sortOrder);
+      const rows = await this.prisma.$queryRaw<
+        Array<{
+          propertyId: string;
+          propertyName: string;
+          transactions: IntegerLike;
+          users: IntegerLike;
+          totalSales: DecimalLike;
+          latestTransactionAt: Date | string | null;
+        }>
+      >(Prisma.sql`
+        ${ctesSql}
+        ,
+        property_rows AS (
+          SELECT
+            fb.property_id AS "propertyId",
+            fb.property_name AS "propertyName",
+            COUNT(*)::bigint AS transactions,
+            COUNT(DISTINCT fb.user_id)::bigint AS users,
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
+                  THEN fb.total_amount
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS "totalSales",
+            MAX(fb.transaction_date) AS "latestTransactionAt"
+          FROM filtered_bookings fb
+          GROUP BY fb.property_id, fb.property_name
+        )
+        SELECT
+          pr."propertyId",
+          pr."propertyName",
+          pr.transactions,
+          pr.users,
+          pr."totalSales",
+          pr."latestTransactionAt"
+        FROM property_rows pr
+        ${orderBySql}
+        LIMIT ${limit}
+        OFFSET ${skip}
+      `);
+
+      const [countRow] = await this.prisma.$queryRaw<
+        Array<{ total: IntegerLike }>
+      >(Prisma.sql`
+        ${ctesSql}
+        ,
+        property_rows AS (
+          SELECT fb.property_id
+          FROM filtered_bookings fb
+          GROUP BY fb.property_id
+        )
+        SELECT COUNT(*)::bigint AS total
+        FROM property_rows
+      `);
+
+      total = this.parseIntegerLike(countRow?.total);
+      data = rows.map((row) => ({
+        propertyId: row.propertyId,
+        propertyName: row.propertyName,
+        transactions: this.parseIntegerLike(row.transactions),
+        users: this.parseIntegerLike(row.users),
+        totalSales: this.decimalLikeToNumber(row.totalSales),
+        latestTransactionAt: this.toISOStringSafe(row.latestTransactionAt),
+      }));
+    }
+
+    if (view === "user") {
+      const orderBySql = this.buildSalesAggregateOrderBy(sortBy, sortOrder);
+      const rows = await this.prisma.$queryRaw<
+        Array<{
+          userId: string;
+          userName: string;
+          transactions: IntegerLike;
+          properties: IntegerLike;
+          totalSales: DecimalLike;
+          latestTransactionAt: Date | string | null;
+        }>
+      >(Prisma.sql`
+        ${ctesSql}
+        ,
+        user_rows AS (
+          SELECT
+            fb.user_id AS "userId",
+            fb.user_name AS "userName",
+            COUNT(*)::bigint AS transactions,
+            COUNT(DISTINCT fb.property_id)::bigint AS properties,
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
+                  THEN fb.total_amount
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS "totalSales",
+            MAX(fb.transaction_date) AS "latestTransactionAt"
+          FROM filtered_bookings fb
+          GROUP BY fb.user_id, fb.user_name
+        )
+        SELECT
+          ur."userId",
+          ur."userName",
+          ur.transactions,
+          ur.properties,
+          ur."totalSales",
+          ur."latestTransactionAt"
+        FROM user_rows ur
+        ${orderBySql}
+        LIMIT ${limit}
+        OFFSET ${skip}
+      `);
+
+      const [countRow] = await this.prisma.$queryRaw<
+        Array<{ total: IntegerLike }>
+      >(Prisma.sql`
+        ${ctesSql}
+        ,
+        user_rows AS (
+          SELECT fb.user_id
+          FROM filtered_bookings fb
+          GROUP BY fb.user_id
+        )
+        SELECT COUNT(*)::bigint AS total
+        FROM user_rows
+      `);
+
+      total = this.parseIntegerLike(countRow?.total);
+      data = rows.map((row) => ({
+        userId: row.userId,
+        userName: row.userName,
+        transactions: this.parseIntegerLike(row.transactions),
+        properties: this.parseIntegerLike(row.properties),
+        totalSales: this.decimalLikeToNumber(row.totalSales),
+        latestTransactionAt: this.toISOStringSafe(row.latestTransactionAt),
+      }));
+    }
+
+    const [summaryRow] = await this.prisma.$queryRaw<
+      Array<{ totalSales: DecimalLike; totalTransactions: IntegerLike }>
+    >(Prisma.sql`
+      ${ctesSql}
+      SELECT
+        COALESCE(
+          SUM(
+            CASE
+              WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
+              THEN fb.total_amount
+              ELSE 0
+            END
+          ),
+          0
+        ) AS "totalSales",
+        COUNT(*)::bigint AS "totalTransactions"
+      FROM filtered_bookings fb
+    `);
+
+    const trendAnchor = endDate
+      ? new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), 1))
+      : new Date(
+          Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1),
+        );
+    const trendStart = new Date(
+      Date.UTC(trendAnchor.getUTCFullYear(), trendAnchor.getUTCMonth() - 6, 1),
+    );
+
+    const trendRows = await this.prisma.$queryRaw<
+      Array<{
+        monthStart: Date | string;
+        sales: DecimalLike;
+        bookings: IntegerLike;
+      }>
+    >(Prisma.sql`
+      ${ctesSql}
+      ,
+      month_series AS (
+        SELECT
+          generate_series(
+            ${trendStart}::date,
+            ${trendAnchor}::date,
+            interval '1 month'
+          )::date AS month_start
+      )
+      SELECT
+        ms.month_start AS "monthStart",
+        COALESCE(
+          SUM(
+            CASE
+              WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
+              THEN fb.total_amount
+              ELSE 0
+            END
+          ),
+          0
+        ) AS sales,
+        COUNT(fb.id)::bigint AS bookings
+      FROM month_series ms
+      LEFT JOIN filtered_bookings fb
+        ON fb.transaction_date >= ms.month_start::timestamptz
+        AND fb.transaction_date < (ms.month_start + interval '1 month')::timestamptz
+      GROUP BY ms.month_start
+      ORDER BY ms.month_start ASC
+    `);
+
+    const totalSales = this.decimalLikeToNumber(summaryRow?.totalSales ?? 0);
+    const totalTransactions = this.parseIntegerLike(
+      summaryRow?.totalTransactions ?? 0,
+    );
+    const monthFormatter = new Intl.DateTimeFormat("id-ID", {
+      month: "short",
+      year: "2-digit",
+      timeZone: "UTC",
+    });
+
+    return {
+      data,
+      summary: {
+        totalSales,
+        totalTransactions,
+        avgPerTransaction:
+          totalTransactions > 0
+            ? Math.round(totalSales / totalTransactions)
+            : 0,
+      },
+      trend: trendRows.map((row) => ({
+        month: monthFormatter.format(this.coerceDateValue(row.monthStart)),
+        sales: this.decimalLikeToNumber(row.sales),
+        bookings: this.parseIntegerLike(row.bookings),
+      })),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        hasNext: page * limit < total,
+        hasPrev: page > 1,
+        view,
+        sortBy,
+        sortOrder,
+        startDate: startDate ? this.toDateKey(startDate) : null,
+        endDate: endDate ? this.toDateKey(endDate) : null,
+        keyword: keywordRaw || null,
+      },
+    };
   };
 
   approvePaymentProof = async (
@@ -1545,6 +1989,138 @@ export class BookingService {
     }, new Prisma.Decimal(0));
   }
 
+  private buildSalesKeywordFilter(
+    view: TenantSalesReportView,
+    keyword: string | null,
+  ) {
+    if (!keyword) return Prisma.sql`TRUE`;
+
+    if (view === "property") {
+      return Prisma.sql`pb.property_name ILIKE ${keyword}`;
+    }
+
+    if (view === "user") {
+      return Prisma.sql`pb.user_name ILIKE ${keyword}`;
+    }
+
+    return Prisma.sql`
+      (
+        pb.order_no ILIKE ${keyword}
+        OR pb.property_name ILIKE ${keyword}
+        OR pb.user_name ILIKE ${keyword}
+      )
+    `;
+  }
+
+  private buildSalesTransactionOrderBy(
+    sortBy: TenantSalesReportSortBy,
+    sortOrder: TenantSalesReportSortOrder,
+  ) {
+    if (sortBy === "total") {
+      if (sortOrder === "asc") {
+        return Prisma.sql`
+          ORDER BY fb.total_amount ASC, fb.transaction_date ASC, fb.id ASC
+        `;
+      }
+
+      return Prisma.sql`
+        ORDER BY fb.total_amount DESC, fb.transaction_date DESC, fb.id DESC
+      `;
+    }
+
+    if (sortOrder === "asc") {
+      return Prisma.sql`
+        ORDER BY fb.transaction_date ASC, fb.total_amount ASC, fb.id ASC
+      `;
+    }
+
+    return Prisma.sql`
+      ORDER BY fb.transaction_date DESC, fb.total_amount DESC, fb.id DESC
+    `;
+  }
+
+  private buildSalesAggregateOrderBy(
+    sortBy: TenantSalesReportSortBy,
+    sortOrder: TenantSalesReportSortOrder,
+  ) {
+    if (sortBy === "total") {
+      if (sortOrder === "asc") {
+        return Prisma.sql`
+          ORDER BY "totalSales" ASC, "latestTransactionAt" ASC
+        `;
+      }
+
+      return Prisma.sql`
+        ORDER BY "totalSales" DESC, "latestTransactionAt" DESC
+      `;
+    }
+
+    if (sortOrder === "asc") {
+      return Prisma.sql`
+        ORDER BY "latestTransactionAt" ASC, "totalSales" ASC
+      `;
+    }
+
+    return Prisma.sql`
+      ORDER BY "latestTransactionAt" DESC, "totalSales" DESC
+    `;
+  }
+
+  private parseIntegerLike(value: IntegerLike) {
+    if (typeof value === "bigint") {
+      return Number(value);
+    }
+
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return 0;
+      return Math.trunc(value);
+    }
+
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return 0;
+      return Math.trunc(parsed);
+    }
+
+    return 0;
+  }
+
+  private decimalLikeToNumber(value: DecimalLike) {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    const parsed = Number(value.toString());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private coerceDateValue(value: Date | string) {
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return new Date(0);
+      return value;
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return new Date(0);
+    return parsed;
+  }
+
+  private toISOStringSafe(value: Date | string | null) {
+    if (!value) return null;
+    const parsed = this.coerceDateValue(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  private toDateOnlyStringSafe(value: Date | string | null) {
+    if (!value) return null;
+    const parsed = this.coerceDateValue(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString().slice(0, 10);
+  }
+
   private parseDate(value: string, label: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
       throw new ApiError(`${label} ${DATE_FORMAT_ERROR}`, 400);
@@ -1689,6 +2265,16 @@ export class BookingService {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return null;
     return parsed;
+  }
+
+  private normalizeCallbackToken(value: string | undefined) {
+    if (!value) return "";
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (trimmed.toLowerCase().startsWith("bearer ")) {
+      return trimmed.slice(7).trim();
+    }
+    return trimmed;
   }
 
   private async sendApprovedBookingReceiptEmail(payload: {

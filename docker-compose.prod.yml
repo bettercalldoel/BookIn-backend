@@ -1,12 +1,14 @@
 services:
   postgres:
     image: postgres:18
-    container_name: postgres_container_prod
+    container_name: bookin_postgres_prod
     restart: always
     volumes:
       - ./docker/prod/postgres:/var/lib/postgresql/18/docker
-    env_file:
-      - .env.prod
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_LOCAL_PASSWORD}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
@@ -15,14 +17,18 @@ services:
 
   app:
     build: .
-    container_name: express_app
+    container_name: bookin_backend_prod
     restart: always
     ports:
       - "8000:8000"
     stdin_open: true
     tty: true # Keeps the container running for debugging
+    command: sh -c "npx prisma db execute --file prisma/init_extensions.sql && npx prisma db push && npx prisma generate && npm run start"
     depends_on:
       postgres:
         condition: service_healthy
     env_file:
       - .env.prod
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_LOCAL_PASSWORD}@postgres:5432/postgres?schema=public
+      DIRECT_URL: postgresql://postgres:${POSTGRES_LOCAL_PASSWORD}@postgres:5432/postgres?schema=public

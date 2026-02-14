@@ -6,6 +6,7 @@ import { UpdatePropertyDTO } from "./dto/update-property.dto.js";
 import { CreateRoomDTO } from "./dto/create-room.dto.js";
 import { UpdateRoomDTO } from "./dto/update-room.dto.js";
 import { SearchPropertyQueryDTO } from "./dto/search-property.dto.js";
+import { ListPropertyQueryDTO } from "./dto/list-property-query.dto.js";
 
 export class PropertyController {
   constructor(private propertyService: PropertyService) {}
@@ -15,13 +16,26 @@ export class PropertyController {
     res.status(200).json(result);
   };
 
+  listPublicCities = async (req: Request, res: Response) => {
+    const search = String(req.query.search ?? "").trim();
+    const limitRaw = Number(req.query.limit ?? 100);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
+
+    const result = await this.propertyService.listPublicCities(search, limit);
+    res.status(200).json(result);
+  };
+
   listProperties = async (req: Request, res: Response) => {
     const tenantAccountId = req.user?.sub ?? "";
     if (!tenantAccountId) {
       throw new ApiError("Unauthorized.", 401);
     }
 
-    const result = await this.propertyService.listProperties(tenantAccountId);
+    const result = await this.propertyService.listProperties(
+      tenantAccountId,
+      req.query as unknown as ListPropertyQueryDTO,
+    );
     res.status(200).json(result);
   };
 

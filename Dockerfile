@@ -11,6 +11,8 @@ RUN npm ci
 
 COPY . .
 
+RUN npm run build
+
 EXPOSE 8000
 
 CMD ["sh", "-c", "npm run db:deploy && npm run start"]

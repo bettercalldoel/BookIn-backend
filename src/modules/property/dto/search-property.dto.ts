@@ -8,6 +8,10 @@ import {
 
 export class SearchPropertyQueryDTO {
   @IsOptional()
+  @IsNumberString()
+  city_id?: string;
+
+  @IsOptional()
   @IsString()
   loc_term?: string;
 
@@ -30,6 +34,10 @@ export class SearchPropertyQueryDTO {
   @IsOptional()
   @IsDateString()
   start_date?: string;
+
+  @IsOptional()
+  @IsNumberString()
+  nights?: string;
 
   @IsOptional()
   @IsDateString()

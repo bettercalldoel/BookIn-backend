@@ -13,6 +13,8 @@ import { CreateReviewDTO } from "./dto/create-review.dto.js";
 import { ReplyReviewDTO } from "./dto/reply-review.dto.js";
 import { ListTenantReviewDTO } from "./dto/list-tenant-review.dto.js";
 import { ReviewIdParamDTO } from "./dto/review-id.dto.js";
+import { ListBookingOptionDTO } from "./dto/list-booking-option.dto.js";
+import { ListTenantSalesReportDTO } from "./dto/list-tenant-sales-report.dto.js";
 import { uploadImage } from "../../lib/multer.js";
 
 export class BookingRouter {
@@ -47,6 +49,7 @@ export class BookingRouter {
       this.authMiddleware.requireAuth,
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.USER),
+      this.validationMiddleware.validateQuery(ListBookingOptionDTO),
       this.bookingController.options,
     );
 
@@ -75,6 +78,15 @@ export class BookingRouter {
       this.authMiddleware.requireAccountType(AccountType.TENANT),
       this.validationMiddleware.validateQuery(ListTenantPaymentProofDTO),
       this.bookingController.listTenantPaymentProofs,
+    );
+
+    this.router.get(
+      "/tenant/reports/sales",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateQuery(ListTenantSalesReportDTO),
+      this.bookingController.listTenantSalesReport,
     );
 
     this.router.get(

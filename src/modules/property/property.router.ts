@@ -10,6 +10,8 @@ import { CreateRoomDTO } from "./dto/create-room.dto.js";
 import { UpdateRoomDTO } from "./dto/update-room.dto.js";
 import { RoomIdParamDTO } from "./dto/room-id.dto.js";
 import { SearchPropertyQueryDTO } from "./dto/search-property.dto.js";
+import { ListPublicCityQueryDTO } from "./dto/list-public-city-query.dto.js";
+import { ListPropertyQueryDTO } from "./dto/list-property-query.dto.js";
 
 export class PropertyRouter {
   private router: Router;
@@ -30,6 +32,12 @@ export class PropertyRouter {
     );
 
     this.router.get(
+      "/cities",
+      this.validationMiddleware.validateQuery(ListPublicCityQueryDTO),
+      this.propertyController.listPublicCities,
+    );
+
+    this.router.get(
       "/search",
       this.validationMiddleware.validateQuery(SearchPropertyQueryDTO),
       this.propertyController.listPublicProperties,
@@ -46,6 +54,7 @@ export class PropertyRouter {
       this.authMiddleware.requireAuth,
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateQuery(ListPropertyQueryDTO),
       this.propertyController.listProperties,
     );
 

@@ -1,0 +1,4 @@
+
+> express-prisma@1.0.0 docker-dev:up
+> docker compose -f docker-compose.dev.yml up -d - run dev:local-db
+
