@@ -385,6 +385,7 @@ model Booking {
   proofDueAt       DateTime?   @map("proof_due_at") @db.Timestamptz(6)
   paymentDueAt     DateTime    @map("payment_due_at") @db.Timestamptz(6)
   paymentConfirmedAt DateTime? @map("payment_confirmed_at") @db.Timestamptz(6)
+  checkInReminderSentAt DateTime? @map("check_in_reminder_sent_at") @db.Timestamptz(6)
   xenditInvoiceId  String?     @unique(map: "uq_bookings_xendit_invoice_id") @map("xendit_invoice_id")
   xenditInvoiceUrl String?     @map("xendit_invoice_url")
   xenditInvoiceStatus String?  @map("xendit_invoice_status")

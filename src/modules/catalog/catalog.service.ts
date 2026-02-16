@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { ApiError } from "../../utils/api-error.js";
 
 type CityResult = {
   id: string;
@@ -93,4 +94,90 @@ export class CatalogService {
       name: created.name,
     };
   };
+
+  updateCategory = async (
+    tenantAccountId: string,
+    categoryIdRaw: string,
+    name: string,
+  ): Promise<CategoryResult> => {
+    const categoryId = this.parseCategoryId(categoryIdRaw);
+    const trimmedName = name.trim();
+
+    const existing = await this.prisma.propertyCategory.findFirst({
+      where: {
+        id: categoryId,
+        tenantAccountId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      throw new ApiError("Kategori tidak ditemukan.", 404);
+    }
+
+    const duplicate = await this.prisma.propertyCategory.findFirst({
+      where: {
+        tenantAccountId,
+        isActive: true,
+        id: { not: categoryId },
+        name: { equals: trimmedName, mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+
+    if (duplicate) {
+      throw new ApiError("Nama kategori sudah digunakan.", 409);
+    }
+
+    const updated = await this.prisma.propertyCategory.update({
+      where: { id: categoryId },
+      data: { name: trimmedName },
+      select: { id: true, name: true },
+    });
+
+    return {
+      id: updated.id.toString(),
+      name: updated.name,
+    };
+  };
+
+  deleteCategory = async (
+    tenantAccountId: string,
+    categoryIdRaw: string,
+  ): Promise<{ message: string; id: string }> => {
+    const categoryId = this.parseCategoryId(categoryIdRaw);
+
+    const existing = await this.prisma.propertyCategory.findFirst({
+      where: {
+        id: categoryId,
+        tenantAccountId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      throw new ApiError("Kategori tidak ditemukan.", 404);
+    }
+
+    await this.prisma.propertyCategory.update({
+      where: { id: categoryId },
+      data: { isActive: false },
+      select: { id: true },
+    });
+
+    return {
+      message: "Kategori berhasil dihapus.",
+      id: categoryId.toString(),
+    };
+  };
+
+  private parseCategoryId(categoryIdRaw: string) {
+    try {
+      return BigInt(categoryIdRaw);
+    } catch {
+      throw new ApiError("ID kategori tidak valid.", 400);
+    }
+  }
 }

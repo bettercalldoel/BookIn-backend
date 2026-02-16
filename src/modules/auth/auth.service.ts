@@ -475,13 +475,6 @@ export class AuthService {
       };
     }
 
-    if (account.type !== AccountType.USER) {
-      return {
-        message:
-          "Jika email terdaftar, kami akan mengirimkan instruksi reset password.",
-      };
-    }
-
     if (account.oauthAccounts.length > 0 || !account.passwordHash) {
       throw new ApiError(
         "Reset password hanya tersedia untuk akun yang dibuat dengan email dan password.",
@@ -539,11 +532,7 @@ export class AuthService {
       );
     }
 
-    if (
-      token.account.type !== AccountType.USER ||
-      token.account.oauthAccounts.length > 0 ||
-      !token.account.passwordHash
-    ) {
+    if (token.account.oauthAccounts.length > 0 || !token.account.passwordHash) {
       throw new ApiError(
         "Reset password hanya tersedia untuk akun yang dibuat dengan email dan password.",
         400,
@@ -615,13 +604,10 @@ export class AuthService {
 
     const account = await this.prisma.account.findUnique({
       where: { id: accountId },
-      include: { userProfile: true },
+      include: { userProfile: true, tenantProfile: true },
     });
 
     if (!account) throw new ApiError("Akun tidak ditemukan.", 404);
-    if (account.type !== AccountType.USER) {
-      throw new ApiError("Forbidden.", 403);
-    }
 
     const updates: Record<string, unknown> = {};
     if (body.avatarUrl !== undefined) {
@@ -630,18 +616,34 @@ export class AuthService {
 
     const name = body.name?.trim();
     if (name) {
-      if (account.userProfile) {
-        await this.prisma.userProfile.update({
-          where: { accountId },
-          data: { fullName: name },
-        });
-      } else {
-        await this.prisma.userProfile.create({
-          data: {
-            accountId,
-            fullName: name,
-          },
-        });
+      if (account.type === AccountType.USER) {
+        if (account.userProfile) {
+          await this.prisma.userProfile.update({
+            where: { accountId },
+            data: { fullName: name },
+          });
+        } else {
+          await this.prisma.userProfile.create({
+            data: {
+              accountId,
+              fullName: name,
+            },
+          });
+        }
+      } else if (account.type === AccountType.TENANT) {
+        if (account.tenantProfile) {
+          await this.prisma.tenantProfile.update({
+            where: { accountId },
+            data: { displayName: name },
+          });
+        } else {
+          await this.prisma.tenantProfile.create({
+            data: {
+              accountId,
+              displayName: name,
+            },
+          });
+        }
       }
     }
 
@@ -668,9 +670,6 @@ export class AuthService {
     });
 
     if (!account) throw new ApiError("Akun tidak ditemukan.", 404);
-    if (account.type !== AccountType.USER) {
-      throw new ApiError("Forbidden.", 403);
-    }
 
     if (account.passwordHash) {
       if (!body.currentPassword) {
@@ -705,9 +704,6 @@ export class AuthService {
     });
 
     if (!account) throw new ApiError("Akun tidak ditemukan.", 404);
-    if (account.type !== AccountType.USER) {
-      throw new ApiError("Forbidden.", 403);
-    }
 
     const email = this.normalizeEmail(body.email);
     if (email === account.email) {

@@ -89,6 +89,20 @@ export class BookingController {
     res.status(200).json(result);
   };
 
+  cancelByTenant = async (req: Request, res: Response) => {
+    const tenantAccountId = resolveUserId(req);
+    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
+
+    const bookingId = String(req.params.id ?? "");
+    if (!bookingId) throw new ApiError("Booking ID required.", 400);
+
+    const result = await this.bookingService.cancelByTenant(
+      tenantAccountId,
+      bookingId,
+    );
+    res.status(200).json(result);
+  };
+
   createReview = async (req: Request, res: Response) => {
     const userId = resolveUserId(req);
     if (!userId) throw new ApiError("Unauthorized.", 401);

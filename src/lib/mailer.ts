@@ -42,6 +42,20 @@ type BookingReceiptEmailPayload = {
   reviewNotes?: string | null;
 };
 
+type CheckInReminderEmailPayload = {
+  to: string;
+  userName: string;
+  orderNo: string;
+  propertyName: string;
+  roomTypeName: string;
+  checkIn: Date;
+  checkOut: Date;
+  guests: number;
+  rooms: number;
+  tenantName?: string;
+  portalUrl?: string;
+};
+
 const DATE_TIMEZONE = "Asia/Jakarta";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -292,6 +306,84 @@ export const sendBookingReceiptEmail = async (
       ${
         portalUrl
           ? `<p style="margin-top: 16px;"><a href="${portalUrl}" style="display:inline-block;padding:10px 16px;background:#0f172a;color:#fff;text-decoration:none;border-radius:999px;">Lihat My Transaction</a></p>`
+          : ""
+      }
+      <p style="margin-top: 18px;">Terima kasih,<br/>${escapeHtml(tenantText)}</p>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: fromAddress,
+    to: payload.to,
+    subject,
+    text,
+    html,
+  });
+};
+
+export const sendCheckInReminderEmail = async (
+  payload: CheckInReminderEmailPayload,
+) => {
+  const checkInText = formatDate(payload.checkIn);
+  const checkOutText = formatDate(payload.checkOut);
+  const nights = countNights(payload.checkIn, payload.checkOut);
+  const tenantText = payload.tenantName?.trim() || "Tim Tenant";
+  const portalUrl = payload.portalUrl?.trim() || "";
+
+  if (!SMTP_HOST) {
+    console.log(
+      `[Email] Check-in reminder | To: ${payload.to} | Order: ${payload.orderNo}`,
+    );
+    console.warn(
+      "[Email] SMTP_HOST belum di-set. Email reminder check-in belum dikirim.",
+    );
+    return;
+  }
+
+  const transporter = createTransporter();
+  const fromAddress = resolveFromAddress();
+  const subject = `Pengingat Check-in H-1 - ${payload.orderNo}`;
+
+  const text = [
+    `Hi ${payload.userName},`,
+    "",
+    "Ini pengingat bahwa jadwal check-in kamu tinggal H-1.",
+    "",
+    `No. Order: ${payload.orderNo}`,
+    `Property: ${payload.propertyName}`,
+    `Tipe Room: ${payload.roomTypeName}`,
+    `Check-in: ${checkInText}`,
+    `Check-out: ${checkOutText}`,
+    `Durasi: ${nights} malam`,
+    `Jumlah tamu/kamar: ${payload.guests} / ${payload.rooms}`,
+    "",
+    "Pastikan membawa identitas diri saat check-in dan mengikuti aturan properti.",
+    portalUrl ? `Detail transaksi: ${portalUrl}` : "",
+    "",
+    `Terima kasih,\n${tenantText}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #0f172a;">
+      <h2 style="margin-bottom: 8px;">Pengingat Check-in H-1</h2>
+      <p style="margin-top: 0;">Hi ${escapeHtml(payload.userName)}, jadwal check-in kamu tinggal H-1.</p>
+      <table style="width: 100%; border-collapse: collapse; margin-top: 12px;">
+        <tbody>
+          <tr><td style="padding: 6px 0; color:#475569;">No. Order</td><td style="padding: 6px 0;"><strong>${escapeHtml(payload.orderNo)}</strong></td></tr>
+          <tr><td style="padding: 6px 0; color:#475569;">Property</td><td style="padding: 6px 0;">${escapeHtml(payload.propertyName)}</td></tr>
+          <tr><td style="padding: 6px 0; color:#475569;">Tipe Room</td><td style="padding: 6px 0;">${escapeHtml(payload.roomTypeName)}</td></tr>
+          <tr><td style="padding: 6px 0; color:#475569;">Check-in</td><td style="padding: 6px 0;">${escapeHtml(checkInText)}</td></tr>
+          <tr><td style="padding: 6px 0; color:#475569;">Check-out</td><td style="padding: 6px 0;">${escapeHtml(checkOutText)}</td></tr>
+          <tr><td style="padding: 6px 0; color:#475569;">Durasi</td><td style="padding: 6px 0;">${nights} malam</td></tr>
+          <tr><td style="padding: 6px 0; color:#475569;">Jumlah Tamu / Kamar</td><td style="padding: 6px 0;">${payload.guests} / ${payload.rooms}</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 14px;">Pastikan membawa identitas diri saat check-in dan mengikuti aturan properti.</p>
+      ${
+        portalUrl
+          ? `<p><a href="${portalUrl}" style="display:inline-block;padding:10px 16px;background:#0f172a;color:#fff;text-decoration:none;border-radius:999px;">Lihat My Transaction</a></p>`
           : ""
       }
       <p style="margin-top: 18px;">Terima kasih,<br/>${escapeHtml(tenantText)}</p>

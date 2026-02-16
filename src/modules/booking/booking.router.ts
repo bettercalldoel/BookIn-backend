@@ -109,6 +109,15 @@ export class BookingRouter {
     );
 
     this.router.post(
+      "/tenant/:id/cancel",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(BookingIdParamDTO),
+      this.bookingController.cancelByTenant,
+    );
+
+    this.router.post(
       "/tenant/payment-proofs/:id/approve",
       this.authMiddleware.requireAuth,
       this.authMiddleware.requireVerifiedAccount,

@@ -42,4 +42,30 @@ export class CatalogController {
 
     res.status(201).json(result);
   };
+
+  updateCategory = async (req: Request, res: Response) => {
+    const tenantAccountId = req.user?.sub ?? "";
+    const { name } = req.body as { name: string };
+    const categoryId = String(req.params.id ?? "");
+
+    const result = await this.catalogService.updateCategory(
+      tenantAccountId,
+      categoryId,
+      name,
+    );
+
+    res.status(200).json(result);
+  };
+
+  deleteCategory = async (req: Request, res: Response) => {
+    const tenantAccountId = req.user?.sub ?? "";
+    const categoryId = String(req.params.id ?? "");
+
+    const result = await this.catalogService.deleteCategory(
+      tenantAccountId,
+      categoryId,
+    );
+
+    res.status(200).json(result);
+  };
 }

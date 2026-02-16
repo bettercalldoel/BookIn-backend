@@ -29,3 +29,9 @@ export const XENDIT_API_BASE_URL =
 export const XENDIT_INVOICE_EXPIRY_MINUTES = Number(
   process.env.XENDIT_INVOICE_EXPIRY_MINUTES ?? "30",
 );
+export const BOOKING_PAYMENT_DUE_MINUTES = Number(
+  process.env.BOOKING_PAYMENT_DUE_MINUTES ?? "120",
+);
+export const BOOKING_PROOF_UPLOAD_DUE_MINUTES = Number(
+  process.env.BOOKING_PROOF_UPLOAD_DUE_MINUTES ?? "60",
+);

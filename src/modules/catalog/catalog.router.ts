@@ -5,6 +5,8 @@ import { ValidationMiddleware } from "../../middlewares/validation.middleware.js
 import { CatalogController } from "./catalog.controller.js";
 import { CatalogQueryDTO } from "./dto/catalog-query.dto.js";
 import { CreateCategoryDTO } from "./dto/create-category.dto.js";
+import { UpdateCategoryDTO } from "./dto/update-category.dto.js";
+import { CategoryIdParamDTO } from "./dto/category-id.dto.js";
 
 export class CatalogRouter {
   private router: Router;
@@ -44,6 +46,25 @@ export class CatalogRouter {
       this.authMiddleware.requireAccountType(AccountType.TENANT),
       this.validationMiddleware.validateBody(CreateCategoryDTO),
       this.catalogController.createCategory,
+    );
+
+    this.router.patch(
+      "/categories/:id",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(CategoryIdParamDTO),
+      this.validationMiddleware.validateBody(UpdateCategoryDTO),
+      this.catalogController.updateCategory,
+    );
+
+    this.router.delete(
+      "/categories/:id",
+      this.authMiddleware.requireAuth,
+      this.authMiddleware.requireVerifiedAccount,
+      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      this.validationMiddleware.validateParams(CategoryIdParamDTO),
+      this.catalogController.deleteCategory,
     );
   };
 

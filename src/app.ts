@@ -113,6 +113,13 @@ export class App {
   private startBookingAutoCancelJob(bookingService: BookingService) {
     const run = async () => {
       try {
+        const reminders = await bookingService.sendHMinusOneCheckInReminders();
+        if (reminders.sent > 0) {
+          console.log(
+            `[BookingJob] Sent ${reminders.sent} H-1 check-in reminder email(s).`,
+          );
+        }
+
         const completed = await bookingService.autoCompleteFinishedBookings();
         if (completed.completed > 0) {
           console.log(

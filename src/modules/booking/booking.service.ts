@@ -12,14 +12,23 @@ import {
 import { ApiError } from "../../utils/api-error.js";
 import {
   APP_BASE_URL,
+  BOOKING_PAYMENT_DUE_MINUTES,
+  BOOKING_PROOF_UPLOAD_DUE_MINUTES,
   XENDIT_CALLBACK_TOKEN,
   XENDIT_SECRET_KEY,
 } from "../../config/env.js";
 import { uploadImageBuffer } from "../../lib/cloudinary.js";
-import { sendBookingReceiptEmail } from "../../lib/mailer.js";
+import {
+  sendBookingReceiptEmail,
+  sendCheckInReminderEmail,
+} from "../../lib/mailer.js";
 import { createXenditInvoice, getXenditInvoiceById } from "../../lib/xendit.js";
 import { CreateBookingDTO } from "./dto/create-booking.dto.js";
-import { ListTenantPaymentProofDTO } from "./dto/list-tenant-payment-proof.dto.js";
+import {
+  ListTenantPaymentProofDTO,
+  TenantPaymentProofSortBy,
+  TenantPaymentProofSortOrder,
+} from "./dto/list-tenant-payment-proof.dto.js";
 import { ListBookingDTO } from "./dto/list-booking.dto.js";
 import { ReviewPaymentProofDTO } from "./dto/review-payment-proof.dto.js";
 import { CreateReviewDTO } from "./dto/create-review.dto.js";
@@ -71,19 +80,56 @@ type DecimalLike = Prisma.Decimal | number | string | null;
 type IntegerLike = bigint | number | string | null;
 
 const DATE_FORMAT_ERROR = "Tanggal harus berformat YYYY-MM-DD.";
-const PAYMENT_PROOF_UPLOAD_TTL_MINUTES = 30;
+const DEFAULT_BOOKING_PAYMENT_DUE_MINUTES = 120;
+const DEFAULT_BOOKING_PROOF_UPLOAD_DUE_MINUTES = 60;
+
+type TenantPaymentProofListItem = {
+  id: string;
+  bookingId: string;
+  method: PaymentMethod;
+  status: PaymentProofStatus;
+  imageUrl: string;
+  submittedAt: Date;
+  reviewedAt: Date | null;
+  reviewNotes: string | null;
+  booking: {
+    id: string;
+    orderNo: string;
+    checkIn: Date;
+    checkOut: Date;
+    guests: number;
+    rooms: number;
+    totalAmount: string;
+    status: OrderStatus;
+    property: {
+      id: string;
+      name: string;
+    };
+    roomType: {
+      id: string;
+      name: string;
+    };
+  };
+  user: {
+    id: string;
+    email: string;
+    fullName: string | null;
+    phone: string | null;
+  };
+};
 
 export class BookingService {
   constructor(private prisma: PrismaClient) {}
 
   create = async (userId: string, dto: CreateBookingDTO) => {
     const paymentMethod = dto.paymentMethod ?? PaymentMethod.MANUAL_TRANSFER;
+    const paymentDueMinutes = this.resolveBookingPaymentDueMinutes();
+    const proofDueMinutes = this.resolveBookingProofUploadDueMinutes();
 
     const result = await this.prisma.$transaction(async (tx) => {
       const quote = await this.buildQuote(tx, dto);
-      const paymentDueAt = new Date(
-        Date.now() + PAYMENT_PROOF_UPLOAD_TTL_MINUTES * 60 * 1000,
-      );
+      const paymentDueAt = new Date(Date.now() + paymentDueMinutes * 60 * 1000);
+      const proofDueAt = new Date(Date.now() + proofDueMinutes * 60 * 1000);
 
       const booking = await tx.booking.create({
         data: {
@@ -103,9 +149,7 @@ export class BookingService {
           status: OrderStatus.MENUNGGU_PEMBAYARAN,
           paymentDueAt,
           proofDueAt:
-            paymentMethod === PaymentMethod.MANUAL_TRANSFER
-              ? paymentDueAt
-              : null,
+            paymentMethod === PaymentMethod.MANUAL_TRANSFER ? proofDueAt : null,
         },
       });
 
@@ -451,6 +495,71 @@ export class BookingService {
     });
   };
 
+  cancelByTenant = async (tenantAccountId: string, bookingId: string) => {
+    return this.prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUnique({
+        where: { id: bookingId },
+        include: {
+          paymentProofs: {
+            where: {
+              status: PaymentProofStatus.SUBMITTED,
+            },
+            select: { id: true },
+            take: 1,
+          },
+          roomType: {
+            select: {
+              totalUnits: true,
+              basePrice: true,
+            },
+          },
+          nights: {
+            select: {
+              stayDate: true,
+            },
+          },
+        },
+      });
+
+      if (!booking) {
+        throw new ApiError("Booking tidak ditemukan.", 404);
+      }
+
+      if (booking.tenantId !== tenantAccountId) {
+        throw new ApiError("Forbidden.", 403);
+      }
+
+      if (booking.status !== OrderStatus.MENUNGGU_PEMBAYARAN) {
+        throw new ApiError(
+          "Tenant hanya dapat membatalkan booking sebelum bukti pembayaran diupload.",
+          400,
+        );
+      }
+
+      if (booking.paymentProofs.length > 0) {
+        throw new ApiError(
+          "Booking tidak bisa dibatalkan karena bukti pembayaran sudah diunggah.",
+          400,
+        );
+      }
+
+      const cancelled = await this.cancelBookingWithInventoryRestore(
+        tx,
+        booking.id,
+        CancelledBy.TENANT,
+      );
+
+      if (!cancelled) {
+        throw new ApiError("Booking tidak dapat dibatalkan.", 400);
+      }
+
+      return {
+        message: "Booking berhasil dibatalkan oleh tenant.",
+        id: booking.id,
+      };
+    });
+  };
+
   autoCancelExpiredUnpaidBookings = async () => {
     const now = new Date();
 
@@ -504,6 +613,103 @@ export class BookingService {
     });
 
     return { completed: result.count };
+  };
+
+  sendHMinusOneCheckInReminders = async () => {
+    const targetDateKey = this.getJakartaDateKey(1);
+    const targetDate = this.parseDate(targetDateKey, "Tanggal reminder");
+    const portalBaseUrl = APP_BASE_URL.replace(/\/$/, "");
+
+    const candidates = await this.prisma.booking.findMany({
+      where: {
+        status: OrderStatus.DIPROSES,
+        checkIn: targetDate,
+        checkInReminderSentAt: null,
+      },
+      select: {
+        id: true,
+        orderNo: true,
+        checkIn: true,
+        checkOut: true,
+        guests: true,
+        rooms: true,
+        user: {
+          select: {
+            email: true,
+            userProfile: {
+              select: {
+                fullName: true,
+              },
+            },
+          },
+        },
+        tenant: {
+          select: {
+            email: true,
+            tenantProfile: {
+              select: {
+                displayName: true,
+              },
+            },
+          },
+        },
+        property: {
+          select: {
+            name: true,
+          },
+        },
+        roomType: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (candidates.length === 0) {
+      return { sent: 0 };
+    }
+
+    let sent = 0;
+    for (const booking of candidates) {
+      try {
+        await sendCheckInReminderEmail({
+          to: booking.user.email,
+          userName: booking.user.userProfile?.fullName ?? booking.user.email,
+          orderNo: booking.orderNo,
+          propertyName: booking.property.name,
+          roomTypeName: booking.roomType.name,
+          checkIn: booking.checkIn,
+          checkOut: booking.checkOut,
+          guests: booking.guests,
+          rooms: booking.rooms,
+          tenantName:
+            booking.tenant.tenantProfile?.displayName ?? booking.tenant.email,
+          portalUrl: `${portalBaseUrl}/my-transaction?orderNo=${encodeURIComponent(booking.orderNo)}`,
+        });
+
+        const updated = await this.prisma.booking.updateMany({
+          where: {
+            id: booking.id,
+            checkInReminderSentAt: null,
+          },
+          data: {
+            checkInReminderSentAt: new Date(),
+          },
+        });
+
+        if (updated.count > 0) {
+          sent += 1;
+        }
+      } catch (error) {
+        console.error(
+          `[BookingService] Failed to send H-1 reminder for booking ${booking.id}.`,
+          error,
+        );
+      }
+    }
+
+    return { sent };
   };
 
   processXenditWebhook = async (
@@ -708,8 +914,9 @@ export class BookingService {
 
     const proofDeadline = booking.proofDueAt ?? booking.paymentDueAt;
     if (proofDeadline && Date.now() > proofDeadline.getTime()) {
+      const proofDueMinutes = this.resolveBookingProofUploadDueMinutes();
       throw new ApiError(
-        "Batas waktu upload bukti pembayaran (30 menit) sudah berakhir.",
+        `Batas waktu upload bukti pembayaran (${proofDueMinutes} menit) sudah berakhir.`,
         400,
       );
     }
@@ -762,14 +969,103 @@ export class BookingService {
   ) => {
     await this.syncPendingXenditBookings({ tenantId: tenantAccountId });
 
-    const status = dto.status ?? PaymentProofStatus.SUBMITTED;
+    const parsedPage = Number(dto.page);
+    const parsedLimit = Number(dto.limit);
+    const page =
+      Number.isFinite(parsedPage) && parsedPage >= 1 ? parsedPage : 1;
+    const limit =
+      Number.isFinite(parsedLimit) && parsedLimit >= 1
+        ? Math.min(parsedLimit, 100)
+        : 10;
+    const skip = (page - 1) * limit;
 
-    const proofs = await this.prisma.paymentProof.findMany({
+    const status = dto.status ?? null;
+    const sortBy: TenantPaymentProofSortBy = dto.sortBy ?? "submittedAt";
+    const sortOrder: TenantPaymentProofSortOrder = dto.sortOrder ?? "desc";
+    const keyword = dto.keyword?.trim() ?? "";
+    const keywordFilter = keyword.length > 0 ? keyword : null;
+
+    const startDate = dto.startDate
+      ? this.parseDate(dto.startDate, "Tanggal mulai")
+      : null;
+    const endDate = dto.endDate
+      ? this.parseDate(dto.endDate, "Tanggal akhir")
+      : null;
+
+    if (startDate && endDate && endDate < startDate) {
+      throw new ApiError("Tanggal akhir harus setelah tanggal mulai.", 400);
+    }
+
+    const bookingStatuses =
+      dto.bookingStatus === OrderStatus.MENUNGGU_PEMBAYARAN
+        ? [
+            OrderStatus.MENUNGGU_PEMBAYARAN,
+            OrderStatus.MENUNGGU_KONFIRMASI_PEMBAYARAN,
+          ]
+        : dto.bookingStatus
+          ? [dto.bookingStatus]
+          : null;
+
+    const submittedAtFilter =
+      startDate || endDate
+        ? {
+            ...(startDate ? { gte: this.startOfDayUTC(startDate) } : {}),
+            ...(endDate ? { lte: this.endOfDayUTC(endDate) } : {}),
+          }
+        : undefined;
+
+    const bookingKeywordWhere: Prisma.BookingWhereInput[] = keywordFilter
+      ? [
+          {
+            orderNo: { contains: keywordFilter, mode: "insensitive" },
+          },
+          {
+            property: {
+              name: { contains: keywordFilter, mode: "insensitive" },
+            },
+          },
+          {
+            roomType: {
+              name: { contains: keywordFilter, mode: "insensitive" },
+            },
+          },
+          {
+            user: {
+              email: { contains: keywordFilter, mode: "insensitive" },
+            },
+          },
+          {
+            user: {
+              userProfile: {
+                is: {
+                  fullName: { contains: keywordFilter, mode: "insensitive" },
+                },
+              },
+            },
+          },
+          {
+            user: {
+              userProfile: {
+                is: {
+                  phone: { contains: keywordFilter, mode: "insensitive" },
+                },
+              },
+            },
+          },
+        ]
+      : [];
+
+    const bookingWhere: Prisma.BookingWhereInput = {
+      tenantId: tenantAccountId,
+      ...(bookingStatuses ? { status: { in: bookingStatuses } } : {}),
+      ...(bookingKeywordWhere.length > 0 ? { OR: bookingKeywordWhere } : {}),
+    };
+
+    const manualProofs = await this.prisma.paymentProof.findMany({
       where: {
-        status,
-        booking: {
-          tenantId: tenantAccountId,
-        },
+        ...(status ? { status } : {}),
+        ...(submittedAtFilter ? { submittedAt: submittedAtFilter } : {}),
+        booking: bookingWhere,
       },
       orderBy: {
         submittedAt: "desc",
@@ -814,121 +1110,279 @@ export class BookingService {
       },
     });
 
-    const mappedProofs = proofs.map((proof) => ({
-      id: proof.id,
-      bookingId: proof.bookingId,
-      method: proof.method,
-      status: proof.status,
-      imageUrl: proof.imageUrl,
-      submittedAt: proof.submittedAt,
-      reviewedAt: proof.reviewedAt,
-      reviewNotes: proof.reviewNotes,
-      booking: {
-        id: proof.booking.id,
-        orderNo: proof.booking.orderNo,
-        checkIn: proof.booking.checkIn,
-        checkOut: proof.booking.checkOut,
-        guests: proof.booking.guests,
-        rooms: proof.booking.rooms,
-        totalAmount: proof.booking.totalAmount.toString(),
-        status: proof.booking.status,
-        property: proof.booking.property,
-        roomType: proof.booking.roomType,
-      },
-      user: {
-        id: proof.booking.user.id,
-        email: proof.booking.user.email,
-        fullName: proof.booking.user.userProfile?.fullName ?? null,
-        phone: proof.booking.user.userProfile?.phone ?? null,
-      },
-    }));
-
-    // Tenant dashboard masih berbasis "payment proof", jadi booking Xendit
-    // diproyeksikan sebagai item APPROVED agar tetap terlihat di order list.
-    if (status !== PaymentProofStatus.APPROVED) {
-      return mappedProofs;
-    }
-
-    const xenditBookings = await this.prisma.booking.findMany({
-      where: {
-        tenantId: tenantAccountId,
-        paymentMethod: PaymentMethod.XENDIT,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      select: {
-        id: true,
-        orderNo: true,
-        checkIn: true,
-        checkOut: true,
-        guests: true,
-        rooms: true,
-        totalAmount: true,
-        status: true,
-        createdAt: true,
-        paymentConfirmedAt: true,
-        xenditInvoiceUrl: true,
-        xenditInvoiceStatus: true,
-        property: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        roomType: {
-          select: {
-            id: true,
-            name: true,
-          },
+    const latestManualProofByBooking = new Map<
+      string,
+      TenantPaymentProofListItem
+    >();
+    for (const proof of manualProofs) {
+      const current = latestManualProofByBooking.get(proof.bookingId);
+      if (current) continue;
+      latestManualProofByBooking.set(proof.bookingId, {
+        id: proof.id,
+        bookingId: proof.bookingId,
+        method: proof.method,
+        status: proof.status,
+        imageUrl: proof.imageUrl,
+        submittedAt: proof.submittedAt,
+        reviewedAt: proof.reviewedAt,
+        reviewNotes: proof.reviewNotes,
+        booking: {
+          id: proof.booking.id,
+          orderNo: proof.booking.orderNo,
+          checkIn: proof.booking.checkIn,
+          checkOut: proof.booking.checkOut,
+          guests: proof.booking.guests,
+          rooms: proof.booking.rooms,
+          totalAmount: proof.booking.totalAmount.toString(),
+          status: proof.booking.status,
+          property: proof.booking.property,
+          roomType: proof.booking.roomType,
         },
         user: {
-          select: {
-            id: true,
-            email: true,
-            userProfile: {
-              select: {
-                fullName: true,
-                phone: true,
+          id: proof.booking.user.id,
+          email: proof.booking.user.email,
+          fullName: proof.booking.user.userProfile?.fullName ?? null,
+          phone: proof.booking.user.userProfile?.phone ?? null,
+        },
+      });
+    }
+
+    let combinedItems = Array.from(latestManualProofByBooking.values());
+
+    const shouldIncludeUnsubmittedManual =
+      status === null || status === PaymentProofStatus.SUBMITTED;
+    if (shouldIncludeUnsubmittedManual) {
+      const pendingManualBookings = await this.prisma.booking.findMany({
+        where: {
+          ...bookingWhere,
+          paymentMethod: PaymentMethod.MANUAL_TRANSFER,
+          status: OrderStatus.MENUNGGU_PEMBAYARAN,
+          paymentProofs: {
+            none: {},
+          },
+          ...(submittedAtFilter ? { createdAt: submittedAtFilter } : {}),
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        select: {
+          id: true,
+          orderNo: true,
+          checkIn: true,
+          checkOut: true,
+          guests: true,
+          rooms: true,
+          totalAmount: true,
+          status: true,
+          createdAt: true,
+          property: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          roomType: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          user: {
+            select: {
+              id: true,
+              email: true,
+              userProfile: {
+                select: {
+                  fullName: true,
+                  phone: true,
+                },
               },
             },
           },
         },
-      },
+      });
+
+      const pendingVirtualProofs: TenantPaymentProofListItem[] =
+        pendingManualBookings.map((booking) => ({
+          id: `pending-${booking.id}`,
+          bookingId: booking.id,
+          method: PaymentMethod.MANUAL_TRANSFER,
+          status: PaymentProofStatus.SUBMITTED,
+          imageUrl: "",
+          submittedAt: booking.createdAt,
+          reviewedAt: null,
+          reviewNotes: "Belum upload bukti pembayaran.",
+          booking: {
+            id: booking.id,
+            orderNo: booking.orderNo,
+            checkIn: booking.checkIn,
+            checkOut: booking.checkOut,
+            guests: booking.guests,
+            rooms: booking.rooms,
+            totalAmount: booking.totalAmount.toString(),
+            status: booking.status,
+            property: booking.property,
+            roomType: booking.roomType,
+          },
+          user: {
+            id: booking.user.id,
+            email: booking.user.email,
+            fullName: booking.user.userProfile?.fullName ?? null,
+            phone: booking.user.userProfile?.phone ?? null,
+          },
+        }));
+
+      combinedItems = [...combinedItems, ...pendingVirtualProofs];
+    }
+
+    // Tenant dashboard masih berbasis "payment proof", jadi booking Xendit
+    // diproyeksikan sebagai item APPROVED agar tetap terlihat di order list.
+    const shouldIncludeXendit =
+      status === null || status === PaymentProofStatus.APPROVED;
+
+    if (shouldIncludeXendit) {
+      const xenditBookings = await this.prisma.booking.findMany({
+        where: {
+          ...bookingWhere,
+          paymentMethod: PaymentMethod.XENDIT,
+          ...(submittedAtFilter ? { createdAt: submittedAtFilter } : {}),
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        select: {
+          id: true,
+          orderNo: true,
+          checkIn: true,
+          checkOut: true,
+          guests: true,
+          rooms: true,
+          totalAmount: true,
+          status: true,
+          createdAt: true,
+          paymentConfirmedAt: true,
+          xenditInvoiceUrl: true,
+          xenditInvoiceStatus: true,
+          property: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          roomType: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          user: {
+            select: {
+              id: true,
+              email: true,
+              userProfile: {
+                select: {
+                  fullName: true,
+                  phone: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const xenditVirtualProofs: TenantPaymentProofListItem[] =
+        xenditBookings.map((booking) => ({
+          id: `xendit-${booking.id}`,
+          bookingId: booking.id,
+          method: PaymentMethod.XENDIT,
+          status: PaymentProofStatus.APPROVED,
+          imageUrl: booking.xenditInvoiceUrl ?? "",
+          submittedAt: booking.createdAt,
+          reviewedAt: booking.paymentConfirmedAt,
+          reviewNotes: booking.xenditInvoiceStatus
+            ? `Xendit status: ${booking.xenditInvoiceStatus}`
+            : "Xendit status: PENDING",
+          booking: {
+            id: booking.id,
+            orderNo: booking.orderNo,
+            checkIn: booking.checkIn,
+            checkOut: booking.checkOut,
+            guests: booking.guests,
+            rooms: booking.rooms,
+            totalAmount: booking.totalAmount.toString(),
+            status: booking.status,
+            property: booking.property,
+            roomType: booking.roomType,
+          },
+          user: {
+            id: booking.user.id,
+            email: booking.user.email,
+            fullName: booking.user.userProfile?.fullName ?? null,
+            phone: booking.user.userProfile?.phone ?? null,
+          },
+        }));
+
+      combinedItems = [...combinedItems, ...xenditVirtualProofs];
+    }
+
+    const compareText = (left: string, right: string) =>
+      left.localeCompare(right, "id-ID", { sensitivity: "base" });
+    const compareNumber = (left: number, right: number) => left - right;
+    const compareDate = (left: Date, right: Date) =>
+      left.getTime() - right.getTime();
+    const toAmount = (value: string) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    combinedItems.sort((a, b) => {
+      let value = 0;
+
+      if (sortBy === "total") {
+        value = compareNumber(
+          toAmount(a.booking.totalAmount),
+          toAmount(b.booking.totalAmount),
+        );
+      } else if (sortBy === "checkIn") {
+        value = compareDate(a.booking.checkIn, b.booking.checkIn);
+      } else if (sortBy === "orderNo") {
+        value = compareText(a.booking.orderNo, b.booking.orderNo);
+      } else {
+        value = compareDate(a.submittedAt, b.submittedAt);
+      }
+
+      if (value === 0) {
+        value = compareDate(a.submittedAt, b.submittedAt);
+      }
+      if (value === 0) {
+        value = compareText(a.booking.orderNo, b.booking.orderNo);
+      }
+
+      return sortOrder === "asc" ? value : -value;
     });
 
-    const xenditVirtualProofs = xenditBookings.map((booking) => ({
-      id: `xendit-${booking.id}`,
-      bookingId: booking.id,
-      method: PaymentMethod.XENDIT,
-      status: PaymentProofStatus.APPROVED,
-      imageUrl: booking.xenditInvoiceUrl ?? "",
-      submittedAt: booking.createdAt,
-      reviewedAt: booking.paymentConfirmedAt,
-      reviewNotes: booking.xenditInvoiceStatus
-        ? `Xendit status: ${booking.xenditInvoiceStatus}`
-        : "Xendit status: PENDING",
-      booking: {
-        id: booking.id,
-        orderNo: booking.orderNo,
-        checkIn: booking.checkIn,
-        checkOut: booking.checkOut,
-        guests: booking.guests,
-        rooms: booking.rooms,
-        totalAmount: booking.totalAmount.toString(),
-        status: booking.status,
-        property: booking.property,
-        roomType: booking.roomType,
-      },
-      user: {
-        id: booking.user.id,
-        email: booking.user.email,
-        fullName: booking.user.userProfile?.fullName ?? null,
-        phone: booking.user.userProfile?.phone ?? null,
-      },
-    }));
+    const total = combinedItems.length;
+    const totalPages = total > 0 ? Math.ceil(total / limit) : 1;
+    const pagedData = combinedItems.slice(skip, skip + limit);
 
-    return [...mappedProofs, ...xenditVirtualProofs];
+    return {
+      data: pagedData,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+        status,
+        bookingStatus: dto.bookingStatus ?? null,
+        keyword: keywordFilter,
+        startDate: dto.startDate ?? null,
+        endDate: dto.endDate ?? null,
+        sortBy,
+        sortOrder,
+      },
+    };
   };
 
   listTenantSalesReport = async (
@@ -2121,6 +2575,26 @@ export class BookingService {
     return parsed.toISOString().slice(0, 10);
   }
 
+  private resolveBookingPaymentDueMinutes() {
+    if (
+      Number.isFinite(BOOKING_PAYMENT_DUE_MINUTES) &&
+      BOOKING_PAYMENT_DUE_MINUTES > 0
+    ) {
+      return Math.floor(BOOKING_PAYMENT_DUE_MINUTES);
+    }
+    return DEFAULT_BOOKING_PAYMENT_DUE_MINUTES;
+  }
+
+  private resolveBookingProofUploadDueMinutes() {
+    if (
+      Number.isFinite(BOOKING_PROOF_UPLOAD_DUE_MINUTES) &&
+      BOOKING_PROOF_UPLOAD_DUE_MINUTES > 0
+    ) {
+      return Math.floor(BOOKING_PROOF_UPLOAD_DUE_MINUTES);
+    }
+    return DEFAULT_BOOKING_PROOF_UPLOAD_DUE_MINUTES;
+  }
+
   private parseDate(value: string, label: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
       throw new ApiError(`${label} ${DATE_FORMAT_ERROR}`, 400);
@@ -2385,5 +2859,28 @@ export class BookingService {
   private normalizeReviewNotes(notes?: string) {
     const clean = notes?.trim();
     return clean ? clean : null;
+  }
+
+  private getJakartaDateKey(offsetDays: number) {
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Jakarta",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const dateParts = formatter.formatToParts(new Date());
+    const year = Number(
+      dateParts.find((part) => part.type === "year")?.value ?? "1970",
+    );
+    const month = Number(
+      dateParts.find((part) => part.type === "month")?.value ?? "01",
+    );
+    const day = Number(
+      dateParts.find((part) => part.type === "day")?.value ?? "01",
+    );
+
+    const baseUtcDate = new Date(Date.UTC(year, month - 1, day));
+    baseUtcDate.setUTCDate(baseUtcDate.getUTCDate() + offsetDays);
+    return baseUtcDate.toISOString().slice(0, 10);
   }
 }
