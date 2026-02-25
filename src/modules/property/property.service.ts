@@ -2,12 +2,27 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { ApiError } from "../../utils/api-error.js";
 import { CreatePropertyDTO } from "./dto/create-property.dto.js";
 import { UpdatePropertyDTO } from "./dto/update-property.dto.js";
+import { UpdatePropertyBreakfastDTO } from "./dto/update-breakfast.dto.js";
 import { CreateRoomDTO } from "./dto/create-room.dto.js";
 import { UpdateRoomDTO } from "./dto/update-room.dto.js";
 import { SearchPropertyQueryDTO } from "./dto/search-property.dto.js";
 import { ListPropertyQueryDTO } from "./dto/list-property-query.dto.js";
+import { PROPERTY_AMENITY_KEY_SET } from "./property-amenities.js";
 
 const MAX_GALLERY_IMAGES = 5;
+const GEOCODE_TIMEOUT_MS = 3500;
+
+type CityLocationContext = {
+  id: bigint;
+  name: string;
+  provinceName: string | null;
+  country: string | null;
+};
+
+type PropertyCoordinates = {
+  latitude: string;
+  longitude: string;
+};
 
 export class PropertyService {
   constructor(private prisma: PrismaClient) {}
@@ -29,37 +44,54 @@ export class PropertyService {
     }));
   };
 
-  listPublicCities = async (search: string, limit: number) => {
-    const cities = await this.prisma.city.findMany({
-      where: {
-        properties: {
-          some: {},
-        },
-        ...(search
-          ? {
-              name: { contains: search, mode: "insensitive" as const },
-            }
-          : {}),
+  listPublicCities = async (
+    search: string,
+    options: { page: number; limit: number; sortOrder: "asc" | "desc" },
+  ) => {
+    const cityWhere: Prisma.CityWhereInput = {
+      properties: {
+        some: {},
       },
-      orderBy: { name: "asc" },
-      take: limit,
-      select: {
-        id: true,
-        name: true,
-        provinceName: true,
-        province: {
-          select: {
-            name: true,
-          },
-        },
-      },
-    });
+      ...(search
+        ? {
+            name: { contains: search, mode: "insensitive" as const },
+          }
+        : {}),
+    };
 
-    return cities.map((city) => ({
-      id: city.id.toString(),
-      name: city.name,
-      province: city.province?.name ?? city.provinceName ?? null,
-    }));
+    const skip = (options.page - 1) * options.limit;
+    const [cities, total] = await this.prisma.$transaction([
+      this.prisma.city.findMany({
+        where: cityWhere,
+        orderBy: { name: options.sortOrder },
+        skip,
+        take: options.limit,
+        select: {
+          id: true,
+          name: true,
+          provinceName: true,
+        },
+      }),
+      this.prisma.city.count({ where: cityWhere }),
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(total / options.limit));
+
+    return {
+      data: cities.map((city) => ({
+        id: city.id.toString(),
+        name: city.name,
+        province: city.provinceName ?? null,
+      })),
+      meta: {
+        page: options.page,
+        limit: options.limit,
+        total,
+        totalPages,
+        hasNext: options.page < totalPages,
+        hasPrev: options.page > 1,
+      },
+    };
   };
 
   listPublicProperties = async (query: SearchPropertyQueryDTO) => {
@@ -126,6 +158,35 @@ export class PropertyService {
     const category = query.category?.trim();
     const sortBy = query.sort_by ?? "name";
     const sortOrder = query.sort_order ?? "asc";
+    const amenityFilterKeys = this.parseAmenityKeysCsv(query.amenities);
+    const amenityFilterMode = query.amenities_mode === "all" ? "all" : "any";
+    const hasNearLatitudeQuery = Boolean(query.lat?.trim());
+    const hasNearLongitudeQuery = Boolean(query.lng?.trim());
+
+    if (hasNearLatitudeQuery !== hasNearLongitudeQuery) {
+      throw new ApiError(
+        "Latitude dan longitude pencarian harus diisi bersamaan.",
+        400,
+      );
+    }
+
+    const nearLatitude = this.parseCoordinate(query.lat, -90, 90);
+    const nearLongitude = this.parseCoordinate(query.lng, -180, 180);
+    if (
+      (hasNearLatitudeQuery && nearLatitude === null) ||
+      (hasNearLongitudeQuery && nearLongitude === null)
+    ) {
+      throw new ApiError("Koordinat pencarian tidak valid.", 400);
+    }
+
+    const parsedRadiusKm = this.parseOptionalFloat(query.radius_km);
+    const nearRadiusKm = hasNearLatitudeQuery ? (parsedRadiusKm ?? 1) : null;
+    if (nearRadiusKm !== null && (nearRadiusKm <= 0 || nearRadiusKm > 50)) {
+      throw new ApiError(
+        "Radius pencarian harus antara 0.1 hingga 50 kilometer.",
+        400,
+      );
+    }
 
     const filters: Prisma.Sql[] = [];
     if (cityId !== null) {
@@ -150,6 +211,37 @@ export class PropertyService {
     }
     if (category) {
       filters.push(Prisma.sql`cat.name ILIKE ${`%${category}%`}`);
+    }
+    if (amenityFilterKeys.length > 0) {
+      const amenityArraySql = this.toTextArraySql(amenityFilterKeys);
+      if (amenityFilterMode === "all") {
+        filters.push(Prisma.sql`p.amenity_keys @> ${amenityArraySql}`);
+      } else {
+        filters.push(Prisma.sql`p.amenity_keys && ${amenityArraySql}`);
+      }
+    }
+    if (
+      nearLatitude !== null &&
+      nearLongitude !== null &&
+      nearRadiusKm !== null
+    ) {
+      filters.push(Prisma.sql`
+        p.latitude IS NOT NULL
+        AND p.longitude IS NOT NULL
+        AND (
+          6371 * acos(
+            LEAST(
+              1,
+              GREATEST(
+                -1,
+                cos(radians(${nearLatitude})) * cos(radians(p.latitude::double precision))
+                * cos(radians(p.longitude::double precision) - radians(${nearLongitude}))
+                + sin(radians(${nearLatitude})) * sin(radians(p.latitude::double precision))
+              )
+            )
+          )
+        ) <= ${nearRadiusKm}
+      `);
     }
 
     const filterSql =
@@ -196,11 +288,16 @@ export class PropertyService {
           p.id,
           p.name,
           p.address,
+          p.latitude,
+          p.longitude,
           c.name AS city_name,
           COALESCE(pv.name, c.province) AS province_name,
           cat.id AS category_id,
           cat.name AS category_name,
           pp.min_price,
+          p.amenity_keys AS amenity_keys,
+          p.breakfast_enabled AS breakfast_enabled,
+          p.breakfast_price_per_pax AS breakfast_price_per_pax,
           cover.url AS cover_url
         FROM property_prices pp
         JOIN properties p ON p.id = pp.property_id
@@ -232,10 +329,15 @@ export class PropertyService {
         id: string;
         name: string;
         address: string | null;
+        latitude: Prisma.Decimal | number | string | null;
+        longitude: Prisma.Decimal | number | string | null;
         cityName: string | null;
         provinceName: string | null;
         categoryId: bigint | number | string | null;
         categoryName: string | null;
+        amenityKeys: string[] | null;
+        breakfastEnabled: boolean;
+        breakfastPricePerPax: Prisma.Decimal | number | string;
         coverUrl: string | null;
         minPrice: Prisma.Decimal | number | string | null;
       }>
@@ -245,10 +347,15 @@ export class PropertyService {
         fp.id,
         fp.name,
         fp.address,
+        fp.latitude,
+        fp.longitude,
         fp.city_name AS "cityName",
         fp.province_name AS "provinceName",
         fp.category_id AS "categoryId",
         fp.category_name AS "categoryName",
+        fp.amenity_keys AS "amenityKeys",
+        fp.breakfast_enabled AS "breakfastEnabled",
+        fp.breakfast_price_per_pax AS "breakfastPricePerPax",
         fp.cover_url AS "coverUrl",
         fp.min_price AS "minPrice"
       FROM filtered_properties fp
@@ -280,10 +387,20 @@ export class PropertyService {
       id: row.id,
       name: row.name,
       address: row.address,
+      latitude: this.decimalToNumber(row.latitude),
+      longitude: this.decimalToNumber(row.longitude),
       city: row.cityName ?? null,
       province: row.provinceName ?? null,
       categoryId: row.categoryId !== null ? String(row.categoryId) : null,
       categoryName: row.categoryName ?? null,
+      amenityKeys: Array.isArray(row.amenityKeys)
+        ? this.normalizeAmenityKeys(row.amenityKeys)
+        : [],
+      breakfast: {
+        enabled: row.breakfastEnabled,
+        pricePerPax: this.decimalToString(row.breakfastPricePerPax),
+        currency: "IDR",
+      },
       coverUrl: row.coverUrl ?? null,
       minPrice:
         row.minPrice !== null ? this.decimalToString(row.minPrice) : null,
@@ -322,7 +439,6 @@ export class PropertyService {
           select: {
             name: true,
             provinceName: true,
-            province: { select: { name: true } },
           },
         },
         roomTypes: {
@@ -348,10 +464,17 @@ export class PropertyService {
       name: property.name,
       description: property.description,
       address: property.address,
+      latitude: this.decimalToNumber(property.latitude),
+      longitude: this.decimalToNumber(property.longitude),
       categoryName: property.category?.name ?? null,
       cityName: property.city?.name ?? null,
-      province:
-        property.city?.province?.name ?? property.city?.provinceName ?? null,
+      province: property.city?.provinceName ?? null,
+      amenityKeys: this.normalizeAmenityKeys(property.amenityKeys),
+      breakfast: {
+        enabled: property.breakfastEnabled,
+        pricePerPax: property.breakfastPricePerPax.toString(),
+        currency: property.breakfastCurrency,
+      },
       coverUrl: property.images[0]?.url ?? null,
       galleryUrls: property.images.map((image) => image.url),
       rooms: property.roomTypes.map((room) => ({
@@ -386,7 +509,6 @@ export class PropertyService {
               id: true,
               name: true,
               provinceName: true,
-              province: { select: { name: true } },
             },
           },
           roomTypes: true,
@@ -406,12 +528,19 @@ export class PropertyService {
         name: property.name,
         description: property.description,
         address: property.address,
+        latitude: this.decimalToNumber(property.latitude),
+        longitude: this.decimalToNumber(property.longitude),
         categoryId: property.categoryId.toString(),
         categoryName: property.category?.name ?? null,
         cityId: property.cityId.toString(),
         cityName: property.city?.name ?? null,
-        province:
-          property.city?.province?.name ?? property.city?.provinceName ?? null,
+        province: property.city?.provinceName ?? null,
+        amenityKeys: this.normalizeAmenityKeys(property.amenityKeys),
+        breakfast: {
+          enabled: property.breakfastEnabled,
+          pricePerPax: property.breakfastPricePerPax.toString(),
+          currency: property.breakfastCurrency,
+        },
         coverUrl: property.images[0]?.url ?? null,
         galleryUrls: property.images.map((image) => image.url),
         rooms: property.roomTypes.map((room) => ({
@@ -438,6 +567,12 @@ export class PropertyService {
     const name = body.name.trim();
     const description = body.description.trim();
     const address = body.address?.trim() || null;
+    const amenityKeys = this.normalizeAmenityKeys(body.amenityKeys ?? []);
+    const breakfastEnabled = body.breakfastEnabled ?? false;
+    const breakfastPricePerPax = this.parseNonNegativeDecimal(
+      body.breakfastPricePerPax,
+      "Harga sarapan tidak valid.",
+    );
 
     if (!body.galleryUrls.includes(body.coverUrl)) {
       throw new ApiError("Foto sampul harus dipilih dari galeri.", 400);
@@ -454,7 +589,19 @@ export class PropertyService {
       tenantAccountId,
       body.categoryId,
     );
-    const cityId = await this.ensureCity(body.cityId);
+    const city = await this.ensureCity(body.cityId);
+    const manualCoordinates = this.parseManualCoordinates(
+      body.latitude,
+      body.longitude,
+    );
+    const coordinates =
+      manualCoordinates ??
+      (await this.resolvePropertyCoordinates({
+        address,
+        cityName: city.name,
+        provinceName: city.provinceName,
+        country: city.country,
+      }));
 
     const orderedUrls = [
       body.coverUrl,
@@ -469,10 +616,17 @@ export class PropertyService {
       data: {
         tenantAccountId,
         categoryId,
-        cityId,
+        cityId: city.id,
         name,
         description,
         address,
+        latitude: coordinates?.latitude ?? null,
+        longitude: coordinates?.longitude ?? null,
+        amenityKeys,
+        breakfastEnabled,
+        breakfastPricePerPax,
+        breakfastCurrency: "IDR",
+        breakfastUpdatedAt: new Date(),
         images: {
           create: images,
         },
@@ -501,6 +655,19 @@ export class PropertyService {
     const name = body.name.trim();
     const description = body.description.trim();
     const address = body.address?.trim() || null;
+    const amenityKeys = this.normalizeAmenityKeys(body.amenityKeys ?? []);
+    const breakfastEnabled = body.breakfastEnabled ?? property.breakfastEnabled;
+    const breakfastPricePerPax =
+      body.breakfastPricePerPax === undefined
+        ? property.breakfastPricePerPax
+        : this.parseNonNegativeDecimal(
+            body.breakfastPricePerPax,
+            "Harga sarapan tidak valid.",
+          );
+    const hasBreakfastChanged =
+      breakfastEnabled !== property.breakfastEnabled ||
+      breakfastPricePerPax.toString() !==
+        property.breakfastPricePerPax.toString();
 
     if (!body.galleryUrls.includes(body.coverUrl)) {
       throw new ApiError("Foto sampul harus dipilih dari galeri.", 400);
@@ -517,7 +684,31 @@ export class PropertyService {
       tenantAccountId,
       body.categoryId,
     );
-    const cityId = await this.ensureCity(body.cityId);
+    const city = await this.ensureCity(body.cityId);
+    const hasLocationChanged =
+      property.cityId !== city.id || (property.address ?? null) !== address;
+    const manualCoordinates = this.parseManualCoordinates(
+      body.latitude,
+      body.longitude,
+    );
+    const coordinates =
+      manualCoordinates ??
+      (await this.resolvePropertyCoordinates({
+        address,
+        cityName: city.name,
+        provinceName: city.provinceName,
+        country: city.country,
+      }));
+    const nextLatitude = coordinates
+      ? coordinates.latitude
+      : hasLocationChanged
+        ? null
+        : property.latitude;
+    const nextLongitude = coordinates
+      ? coordinates.longitude
+      : hasLocationChanged
+        ? null
+        : property.longitude;
 
     const orderedUrls = [
       body.coverUrl,
@@ -536,8 +727,17 @@ export class PropertyService {
           name,
           description,
           address,
+          amenityKeys,
           categoryId,
-          cityId,
+          cityId: city.id,
+          latitude: nextLatitude,
+          longitude: nextLongitude,
+          breakfastEnabled,
+          breakfastPricePerPax,
+          breakfastCurrency: "IDR",
+          breakfastUpdatedAt: hasBreakfastChanged
+            ? new Date()
+            : property.breakfastUpdatedAt,
           images: {
             create: images,
           },
@@ -548,6 +748,59 @@ export class PropertyService {
     return {
       message: "Properti berhasil diperbarui.",
       id: propertyId,
+    };
+  };
+
+  updatePropertyBreakfast = async (
+    tenantAccountId: string,
+    propertyId: string,
+    body: UpdatePropertyBreakfastDTO,
+  ) => {
+    const property = await this.prisma.property.findFirst({
+      where: { id: propertyId, tenantAccountId },
+      select: {
+        id: true,
+        breakfastEnabled: true,
+        breakfastPricePerPax: true,
+        breakfastCurrency: true,
+      },
+    });
+
+    if (!property) {
+      throw new ApiError("Properti tidak ditemukan.", 404);
+    }
+
+    const breakfastPricePerPax = this.parseNonNegativeDecimal(
+      body.breakfastPricePerPax,
+      "Harga sarapan tidak valid.",
+    );
+
+    const updated = await this.prisma.property.update({
+      where: { id: propertyId },
+      data: {
+        breakfastEnabled: body.breakfastEnabled,
+        breakfastPricePerPax,
+        breakfastCurrency: property.breakfastCurrency || "IDR",
+        breakfastUpdatedAt: new Date(),
+      },
+      select: {
+        id: true,
+        breakfastEnabled: true,
+        breakfastPricePerPax: true,
+        breakfastCurrency: true,
+        breakfastUpdatedAt: true,
+      },
+    });
+
+    return {
+      message: "Pengaturan sarapan berhasil diperbarui.",
+      data: {
+        propertyId: updated.id,
+        breakfastEnabled: updated.breakfastEnabled,
+        breakfastPricePerPax: updated.breakfastPricePerPax.toString(),
+        breakfastCurrency: updated.breakfastCurrency,
+        breakfastUpdatedAt: updated.breakfastUpdatedAt,
+      },
     };
   };
 
@@ -707,7 +960,7 @@ export class PropertyService {
     return categoryId;
   }
 
-  private async ensureCity(cityIdRaw: string) {
+  private async ensureCity(cityIdRaw: string): Promise<CityLocationContext> {
     let cityId: bigint;
     try {
       cityId = BigInt(cityIdRaw);
@@ -716,14 +969,142 @@ export class PropertyService {
     }
     const city = await this.prisma.city.findUnique({
       where: { id: cityId },
-      select: { id: true },
+      select: {
+        id: true,
+        name: true,
+        provinceName: true,
+        country: true,
+      },
     });
 
     if (!city) {
       throw new ApiError("Kota tidak ditemukan.", 404);
     }
 
-    return cityId;
+    return {
+      id: city.id,
+      name: city.name,
+      provinceName: city.provinceName ?? null,
+      country: city.country ?? null,
+    };
+  }
+
+  private async resolvePropertyCoordinates(input: {
+    address: string | null;
+    cityName: string;
+    provinceName: string | null;
+    country: string | null;
+  }): Promise<PropertyCoordinates | null> {
+    const candidates = this.buildGeocodeQueryCandidates(input);
+    if (candidates.length === 0) return null;
+
+    for (const query of candidates) {
+      const geocodeUrl = new URL("https://nominatim.openstreetmap.org/search");
+      geocodeUrl.searchParams.set("q", query);
+      geocodeUrl.searchParams.set("format", "jsonv2");
+      geocodeUrl.searchParams.set("limit", "1");
+      geocodeUrl.searchParams.set("addressdetails", "0");
+
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(
+        () => abortController.abort(),
+        GEOCODE_TIMEOUT_MS,
+      );
+
+      try {
+        const response = await fetch(geocodeUrl.toString(), {
+          signal: abortController.signal,
+          headers: {
+            "Accept-Language": "id,en",
+            "User-Agent": "BookIn/1.0 (property-geocoding)",
+          },
+        });
+        if (!response.ok) {
+          continue;
+        }
+
+        const payload = (await response.json()) as Array<{
+          lat?: string;
+          lon?: string;
+        }>;
+        const firstResult = payload[0];
+        const latitude = this.parseCoordinate(firstResult?.lat, -90, 90);
+        const longitude = this.parseCoordinate(firstResult?.lon, -180, 180);
+        if (latitude === null || longitude === null) {
+          continue;
+        }
+
+        return {
+          latitude: latitude.toFixed(7),
+          longitude: longitude.toFixed(7),
+        };
+      } catch {
+        continue;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    return null;
+  }
+
+  private buildGeocodeQueryCandidates(input: {
+    address: string | null;
+    cityName: string;
+    provinceName: string | null;
+    country: string | null;
+  }) {
+    const address = input.address?.trim() ?? "";
+    const cityName = input.cityName.trim();
+    const province = input.provinceName?.trim() ?? "";
+    const country = input.country?.trim() || "Indonesia";
+
+    const candidates = [
+      [address, cityName, province, country].filter(Boolean).join(", "),
+      [address, cityName, country].filter(Boolean).join(", "),
+      address,
+      [cityName, province, country].filter(Boolean).join(", "),
+    ]
+      .map((query) => query.trim())
+      .filter((query) => query.length > 0);
+
+    return Array.from(new Set(candidates));
+  }
+
+  private parseManualCoordinates(
+    latitudeValue: number | undefined,
+    longitudeValue: number | undefined,
+  ): PropertyCoordinates | null {
+    const hasLatitude = latitudeValue !== undefined;
+    const hasLongitude = longitudeValue !== undefined;
+
+    if (!hasLatitude && !hasLongitude) return null;
+    if (!hasLatitude || !hasLongitude) {
+      throw new ApiError("Latitude dan longitude harus diisi bersamaan.", 400);
+    }
+
+    const latitude = this.parseCoordinate(latitudeValue, -90, 90);
+    const longitude = this.parseCoordinate(longitudeValue, -180, 180);
+    if (latitude === null || longitude === null) {
+      throw new ApiError("Koordinat lokasi tidak valid.", 400);
+    }
+
+    return {
+      latitude: latitude.toFixed(7),
+      longitude: longitude.toFixed(7),
+    };
+  }
+
+  private parseCoordinate(
+    value: string | number | undefined,
+    min: number,
+    max: number,
+  ): number | null {
+    if (value === undefined) return null;
+    if (typeof value === "string" && !value.trim()) return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < min || parsed > max) return null;
+    return parsed;
   }
 
   private parseDecimal(value: string, message: string) {
@@ -734,11 +1115,34 @@ export class PropertyService {
     return value;
   }
 
+  private parseNonNegativeDecimal(
+    value: number | string | null | undefined,
+    message: string,
+  ) {
+    if (value === null || value === undefined || value === "") {
+      return "0";
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new ApiError(message, 400);
+    }
+
+    return Math.round(parsed).toString();
+  }
+
   private parseOptionalInt(value?: string) {
     if (!value) return 0;
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed < 0) return 0;
     return Math.floor(parsed);
+  }
+
+  private parseOptionalFloat(value?: string) {
+    if (!value?.trim()) return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    return parsed;
   }
 
   private parseDate(value: string, label: string) {
@@ -802,6 +1206,37 @@ export class PropertyService {
     }
   }
 
+  private parseAmenityKeysCsv(value?: string) {
+    if (!value?.trim()) return [];
+    return this.normalizeAmenityKeys(value.split(","));
+  }
+
+  private normalizeAmenityKeys(values: string[]) {
+    const uniqueValues = Array.from(
+      new Set(
+        values
+          .map((value) => value.trim().toLowerCase())
+          .filter((value) => value.length > 0),
+      ),
+    );
+    const invalidValues = uniqueValues.filter(
+      (value) => !PROPERTY_AMENITY_KEY_SET.has(value),
+    );
+    if (invalidValues.length > 0) {
+      throw new ApiError(
+        `Fasilitas tidak valid: ${invalidValues.join(", ")}.`,
+        400,
+      );
+    }
+    return uniqueValues;
+  }
+
+  private toTextArraySql(values: string[]) {
+    return Prisma.sql`ARRAY[${Prisma.join(
+      values.map((value) => Prisma.sql`${value}`),
+    )}]::text[]`;
+  }
+
   private parseIntegerLike(value: bigint | number | string | null | undefined) {
     if (typeof value === "bigint") return Number(value);
     if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -816,5 +1251,15 @@ export class PropertyService {
     if (typeof value === "string") return value;
     if (typeof value === "number") return String(value);
     return value.toString();
+  }
+
+  private decimalToNumber(
+    value: Prisma.Decimal | number | string | null | undefined,
+  ) {
+    if (value === null || value === undefined) return null;
+    const parsed =
+      typeof value === "number" ? value : Number(this.decimalToString(value));
+    if (!Number.isFinite(parsed)) return null;
+    return parsed;
   }
 }

@@ -1,4 +1,5 @@
 import {
+  IsIn,
   IsNumberString,
   IsOptional,
   IsString,
@@ -14,4 +15,18 @@ export class CatalogQueryDTO {
   @IsOptional()
   @IsNumberString()
   limit?: string;
+
+  @IsOptional()
+  @IsNumberString()
+  page?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(["name"])
+  sortBy?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(["asc", "desc"])
+  sortOrder?: string;
 }

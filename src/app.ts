@@ -25,6 +25,12 @@ import { MediaService } from "./modules/media/media.service.js";
 import { PropertyController } from "./modules/property/property.controller.js";
 import { PropertyRouter } from "./modules/property/property.router.js";
 import { PropertyService } from "./modules/property/property.service.js";
+import {
+  AppControllers,
+  AppMiddlewares,
+  AppRouters,
+  AppServices,
+} from "./app.types.js";
 
 export class App {
   app: Express;
@@ -47,104 +53,132 @@ export class App {
   }
 
   private registerModules() {
-    // shared dependency
-    const prismaClient = prisma;
+    const services = this.createServices();
+    const controllers = this.createControllers(services);
+    const middlewares = this.createMiddlewares();
+    const routers = this.createRouters(controllers, middlewares);
+    this.mountRouters(routers);
+    this.startBookingAutoCancelJob(services.bookingService);
+  }
 
-    // services
-    const authService = new AuthService(prismaClient);
-    const availabilityService = new AvailabilityService(prismaClient);
-    const bookingService = new BookingService(prismaClient);
-    const catalogService = new CatalogService(prismaClient);
-    const mediaService = new MediaService();
-    const propertyService = new PropertyService(prismaClient);
+  private createServices() {
+    return {
+      authService: new AuthService(prisma),
+      availabilityService: new AvailabilityService(prisma),
+      bookingService: new BookingService(prisma),
+      catalogService: new CatalogService(prisma),
+      mediaService: new MediaService(),
+      propertyService: new PropertyService(prisma),
+    };
+  }
 
-    // controllers
-    const authController = new AuthController(authService);
-    const availabilityController = new AvailabilityController(
-      availabilityService,
-    );
-    const bookingController = new BookingController(bookingService);
-    const catalogController = new CatalogController(catalogService);
-    const mediaController = new MediaController(mediaService);
-    const propertyController = new PropertyController(propertyService);
+  private createControllers(services: AppServices) {
+    return {
+      authController: new AuthController(services.authService),
+      availabilityController: new AvailabilityController(
+        services.availabilityService,
+      ),
+      bookingController: new BookingController(services.bookingService),
+      catalogController: new CatalogController(services.catalogService),
+      mediaController: new MediaController(services.mediaService),
+      propertyController: new PropertyController(services.propertyService),
+    };
+  }
 
-    // middlewares
-    const validationMiddleware = new ValidationMiddleware();
-    const authMiddleware = new AuthMiddleware(prismaClient);
+  private createMiddlewares(): AppMiddlewares {
+    return {
+      validationMiddleware: new ValidationMiddleware(),
+      authMiddleware: new AuthMiddleware(prisma),
+    };
+  }
 
-    // routers
-    const authRouter = new AuthRouter(
-      authController,
-      validationMiddleware,
-      authMiddleware,
-    );
-    const availabilityRouter = new AvailabilityRouter(
-      availabilityController,
-      validationMiddleware,
-      authMiddleware,
-    );
-    const bookingRouter = new BookingRouter(
-      bookingController,
-      validationMiddleware,
-      authMiddleware,
-    );
-    const catalogRouter = new CatalogRouter(
-      catalogController,
-      validationMiddleware,
-      authMiddleware,
-    );
-    const mediaRouter = new MediaRouter(mediaController, authMiddleware);
-    const propertyRouter = new PropertyRouter(
-      propertyController,
-      validationMiddleware,
-      authMiddleware,
-    );
+  private createRouters(
+    controllers: AppControllers,
+    middlewares: AppMiddlewares,
+  ): AppRouters {
+    return {
+      authRouter: new AuthRouter(
+        controllers.authController,
+        middlewares.validationMiddleware,
+        middlewares.authMiddleware,
+      ),
+      availabilityRouter: new AvailabilityRouter(
+        controllers.availabilityController,
+        middlewares.validationMiddleware,
+        middlewares.authMiddleware,
+      ),
+      bookingRouter: new BookingRouter(
+        controllers.bookingController,
+        middlewares.validationMiddleware,
+        middlewares.authMiddleware,
+      ),
+      catalogRouter: new CatalogRouter(
+        controllers.catalogController,
+        middlewares.validationMiddleware,
+        middlewares.authMiddleware,
+      ),
+      mediaRouter: new MediaRouter(
+        controllers.mediaController,
+        middlewares.authMiddleware,
+      ),
+      propertyRouter: new PropertyRouter(
+        controllers.propertyController,
+        middlewares.validationMiddleware,
+        middlewares.authMiddleware,
+      ),
+    };
+  }
 
-    this.app.use("/auth", authRouter.getRouter());
-    this.app.use("/availability", availabilityRouter.getRouter());
-    this.app.use("/bookings", bookingRouter.getRouter());
-    this.app.use("/catalog", catalogRouter.getRouter());
-    this.app.use("/media", mediaRouter.getRouter());
-    this.app.use("/properties", propertyRouter.getRouter());
-
-    this.startBookingAutoCancelJob(bookingService);
+  private mountRouters(routers: AppRouters) {
+    this.app.use("/auth", routers.authRouter.getRouter());
+    this.app.use("/availability", routers.availabilityRouter.getRouter());
+    this.app.use("/bookings", routers.bookingRouter.getRouter());
+    this.app.use("/catalog", routers.catalogRouter.getRouter());
+    this.app.use("/media", routers.mediaRouter.getRouter());
+    this.app.use("/properties", routers.propertyRouter.getRouter());
   }
 
   private startBookingAutoCancelJob(bookingService: BookingService) {
-    const run = async () => {
-      try {
-        const reminders = await bookingService.sendHMinusOneCheckInReminders();
-        if (reminders.sent > 0) {
-          console.log(
-            `[BookingJob] Sent ${reminders.sent} H-1 check-in reminder email(s).`,
-          );
-        }
-
-        const completed = await bookingService.autoCompleteFinishedBookings();
-        if (completed.completed > 0) {
-          console.log(
-            `[BookingJob] Marked ${completed.completed} booking(s) as selesai.`,
-          );
-        }
-
-        const result = await bookingService.autoCancelExpiredUnpaidBookings();
-        if (result.cancelled > 0) {
-          console.log(
-            `[BookingJob] Auto-cancelled ${result.cancelled} expired unpaid booking(s).`,
-          );
-        }
-      } catch (error) {
-        console.error(
-          "[BookingJob] Failed to auto-cancel expired bookings.",
-          error,
-        );
-      }
-    };
-
+    const run = () => this.runBookingAutoJobs(bookingService);
     void run();
-    setInterval(() => {
-      void run();
-    }, 60 * 1000).unref();
+    setInterval(() => void run(), 60 * 1000).unref();
+  }
+
+  private async runBookingAutoJobs(bookingService: BookingService) {
+    try {
+      await this.sendBookingReminderJob(bookingService);
+      await this.runAutoCompleteJob(bookingService);
+      await this.runAutoCancelJob(bookingService);
+    } catch (error) {
+      console.error(
+        "[BookingJob] Failed to run booking automation jobs.",
+        error,
+      );
+    }
+  }
+
+  private async sendBookingReminderJob(bookingService: BookingService) {
+    const reminders = await bookingService.sendHMinusOneCheckInReminders();
+    if (reminders.sent <= 0) return;
+    console.info(
+      `[BookingJob] Sent ${reminders.sent} H-1 check-in reminder email(s).`,
+    );
+  }
+
+  private async runAutoCompleteJob(bookingService: BookingService) {
+    const completed = await bookingService.autoCompleteFinishedBookings();
+    if (completed.completed <= 0) return;
+    console.info(
+      `[BookingJob] Marked ${completed.completed} booking(s) as selesai.`,
+    );
+  }
+
+  private async runAutoCancelJob(bookingService: BookingService) {
+    const result = await bookingService.autoCancelExpiredUnpaidBookings();
+    if (result.cancelled <= 0) return;
+    console.info(
+      `[BookingJob] Auto-cancelled ${result.cancelled} expired unpaid booking(s).`,
+    );
   }
 
   private handleError() {
@@ -153,7 +187,7 @@ export class App {
 
   public start() {
     this.app.listen(PORT, () => {
-      console.log(`Server running on port: ${PORT}`);
+      console.info(`Server running on port: ${PORT}`);
     });
   }
 }

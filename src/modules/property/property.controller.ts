@@ -7,6 +7,8 @@ import { CreateRoomDTO } from "./dto/create-room.dto.js";
 import { UpdateRoomDTO } from "./dto/update-room.dto.js";
 import { SearchPropertyQueryDTO } from "./dto/search-property.dto.js";
 import { ListPropertyQueryDTO } from "./dto/list-property-query.dto.js";
+import { UpdatePropertyBreakfastDTO } from "./dto/update-breakfast.dto.js";
+import { ListPublicCityQueryDTO } from "./dto/list-public-city-query.dto.js";
 
 export class PropertyController {
   constructor(private propertyService: PropertyService) {}
@@ -17,12 +19,21 @@ export class PropertyController {
   };
 
   listPublicCities = async (req: Request, res: Response) => {
-    const search = String(req.query.search ?? "").trim();
-    const limitRaw = Number(req.query.limit ?? 100);
+    const query = req.query as unknown as ListPublicCityQueryDTO;
+    const search = String(query.search ?? "").trim();
+    const limitRaw = Number(query.limit ?? 100);
+    const pageRaw = Number(query.page ?? 1);
     const limit =
       Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
+    const page =
+      Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
+    const sortOrder = query.sortOrder === "desc" ? "desc" : "asc";
 
-    const result = await this.propertyService.listPublicCities(search, limit);
+    const result = await this.propertyService.listPublicCities(search, {
+      page,
+      limit,
+      sortOrder,
+    });
     res.status(200).json(result);
   };
 
@@ -77,6 +88,21 @@ export class PropertyController {
       tenantAccountId,
       String(req.params.id ?? ""),
       req.body as UpdatePropertyDTO,
+    );
+
+    res.status(200).json(result);
+  };
+
+  updatePropertyBreakfast = async (req: Request, res: Response) => {
+    const tenantAccountId = req.user?.sub ?? "";
+    if (!tenantAccountId) {
+      throw new ApiError("Unauthorized.", 401);
+    }
+
+    const result = await this.propertyService.updatePropertyBreakfast(
+      tenantAccountId,
+      String(req.params.id ?? ""),
+      req.body as UpdatePropertyBreakfastDTO,
     );
 
     res.status(200).json(result);

@@ -3,6 +3,11 @@ import { validate } from "class-validator";
 import { NextFunction, Request, Response } from "express";
 import { ApiError } from "../utils/api-error.js";
 
+const VALIDATION_OPTIONS = {
+  whitelist: true,
+  forbidNonWhitelisted: true,
+};
+
 export class ValidationMiddleware {
   validateBody<T>(dtoClass: new () => T) {
     return async (req: Request, _res: Response, next: NextFunction) => {
@@ -10,7 +15,7 @@ export class ValidationMiddleware {
 
       if (!req.body) throw new ApiError("Request body is required", 400);
 
-      const errors = await validate(dtoInstance as any);
+      const errors = await validate(dtoInstance as any, VALIDATION_OPTIONS);
 
       if (errors.length > 0) {
         const message = errors
@@ -30,7 +35,7 @@ export class ValidationMiddleware {
   validateQuery<T>(dtoClass: new () => T) {
     return async (req: Request, _res: Response, next: NextFunction) => {
       const dtoInstance = plainToInstance(dtoClass, req.query);
-      const errors = await validate(dtoInstance as any);
+      const errors = await validate(dtoInstance as any, VALIDATION_OPTIONS);
 
       if (errors.length > 0) {
         const message = errors
@@ -50,7 +55,7 @@ export class ValidationMiddleware {
   validateParams<T>(dtoClass: new () => T) {
     return async (req: Request, _res: Response, next: NextFunction) => {
       const dtoInstance = plainToInstance(dtoClass, req.params);
-      const errors = await validate(dtoInstance as any);
+      const errors = await validate(dtoInstance as any, VALIDATION_OPTIONS);
 
       if (errors.length > 0) {
         const message = errors

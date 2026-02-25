@@ -11,6 +11,11 @@ type UploadedFile = {
   size?: number;
 };
 
+type RequestWithUploads = Request & {
+  file?: UploadedFile;
+  files?: UploadedFile[] | Record<string, UploadedFile[]>;
+};
+
 function validateSingleFile(
   file: UploadedFile,
   options: FileValidationOptions,
@@ -28,32 +33,26 @@ function validateSingleFile(
   }
 }
 
+const collectUploadedFiles = (req: RequestWithUploads) => {
+  if (req.file) return [req.file];
+  if (Array.isArray(req.files)) return req.files;
+  if (req.files && typeof req.files === "object") {
+    return Object.values(req.files).flat();
+  }
+  return [];
+};
+
+const validateUploadedFiles = (
+  files: UploadedFile[],
+  options: FileValidationOptions,
+) => {
+  files.forEach((file) => validateSingleFile(file, options));
+};
+
 export function createFileValidationMiddleware(options: FileValidationOptions) {
   return (req: Request, _res: Response, next: NextFunction) => {
-    const file = (req as Request & { file?: UploadedFile }).file;
-    const files = (
-      req as Request & {
-        files?: UploadedFile[] | Record<string, UploadedFile[]>;
-      }
-    ).files;
-
-    if (file) {
-      validateSingleFile(file, options);
-      return next();
-    }
-
-    if (Array.isArray(files)) {
-      files.forEach((item) => validateSingleFile(item, options));
-      return next();
-    }
-
-    if (files && typeof files === "object") {
-      Object.values(files)
-        .flat()
-        .forEach((item) => validateSingleFile(item, options));
-      return next();
-    }
-
-    return next();
+    const files = collectUploadedFiles(req as RequestWithUploads);
+    validateUploadedFiles(files, options);
+    next();
   };
 }

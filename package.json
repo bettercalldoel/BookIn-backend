@@ -15,11 +15,13 @@
     "db:deploy": "npx prisma migrate deploy && npx prisma generate",
     "db:migrate-remote-to-local": "node scripts/db-migrate-remote-to-local.mjs",
     "db:sync:dev": "LOCAL_POSTGRES_CONTAINER=postgres_container_dev node scripts/db-migrate-remote-to-local.mjs",
+    "db:backfill:property-coordinates": "node scripts/backfill-property-coordinates.mjs",
     "docker-dev:up": "docker compose -f docker-compose.dev.yml up -d",
     "docker-dev:down": "docker compose -f docker-compose.dev.yml down",
     "docker-prod:up": "docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build",
     "docker-prod:down": "docker compose --env-file .env.prod -f docker-compose.prod.yml down",
     "docker-prod:logs": "docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f",
+    "check:standardization": "node ../scripts/standardization-check.mjs",
     "format": "npx prettier --write .",
     "format:check": "npx prettier --check .",
     "prepare": "husky"

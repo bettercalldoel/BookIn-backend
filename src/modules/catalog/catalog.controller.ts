@@ -1,32 +1,52 @@
 import { Request, Response } from "express";
 import { CatalogService } from "./catalog.service.js";
+import { CatalogQueryDTO } from "./dto/catalog-query.dto.js";
 
 const DEFAULT_LIMIT = 10;
+const DEFAULT_PAGE = 1;
 
 export class CatalogController {
   constructor(private catalogService: CatalogService) {}
 
   getCities = async (req: Request, res: Response) => {
-    const search = String(req.query.search ?? "").trim();
-    const limit = Number(req.query.limit ?? DEFAULT_LIMIT);
+    const query = req.query as unknown as CatalogQueryDTO;
+    const search = String(query.search ?? "").trim();
+    const limit = Number(query.limit ?? DEFAULT_LIMIT);
+    const page = Number(query.page ?? DEFAULT_PAGE);
+    const sortOrder = query.sortOrder === "desc" ? "desc" : "asc";
     const safeLimit =
       Number.isFinite(limit) && limit > 0 ? Math.min(limit, 20) : DEFAULT_LIMIT;
+    const safePage =
+      Number.isFinite(page) && page > 0 ? Math.floor(page) : DEFAULT_PAGE;
 
-    const data = await this.catalogService.listCities(search, safeLimit);
+    const data = await this.catalogService.listCities(search, {
+      page: safePage,
+      limit: safeLimit,
+      sortOrder,
+    });
     res.json(data);
   };
 
   getCategories = async (req: Request, res: Response) => {
-    const search = String(req.query.search ?? "").trim();
-    const limit = Number(req.query.limit ?? DEFAULT_LIMIT);
+    const query = req.query as unknown as CatalogQueryDTO;
+    const search = String(query.search ?? "").trim();
+    const limit = Number(query.limit ?? DEFAULT_LIMIT);
+    const page = Number(query.page ?? DEFAULT_PAGE);
+    const sortOrder = query.sortOrder === "desc" ? "desc" : "asc";
     const safeLimit =
       Number.isFinite(limit) && limit > 0 ? Math.min(limit, 20) : DEFAULT_LIMIT;
+    const safePage =
+      Number.isFinite(page) && page > 0 ? Math.floor(page) : DEFAULT_PAGE;
     const tenantAccountId = req.user?.sub ?? "";
 
     const data = await this.catalogService.listCategories(
       tenantAccountId,
       search,
-      safeLimit,
+      {
+        page: safePage,
+        limit: safeLimit,
+        sortOrder,
+      },
     );
     res.json(data);
   };

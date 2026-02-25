@@ -37,37 +37,61 @@ type XenditApiErrorPayload = {
   errors?: { message?: string }[];
 };
 
+const DEFAULT_XENDIT_ERROR = "Gagal menghubungi Xendit.";
+
 const getBasicAuthHeader = (secretKey: string) =>
   `Basic ${Buffer.from(`${secretKey}:`).toString("base64")}`;
 
-const parseXenditErrorMessage = (payload: unknown) => {
-  if (!payload || typeof payload !== "object") {
-    return "Gagal menghubungi Xendit.";
-  }
+const normalizeMessage = (value?: string | null) => value?.trim() ?? "";
 
-  const typed = payload as XenditApiErrorPayload;
-  if (typed.message?.trim()) {
-    return typed.message.trim();
-  }
-
-  const nestedMessage = typed.errors?.find((item) =>
-    item.message?.trim(),
-  )?.message;
-  if (nestedMessage?.trim()) {
-    return nestedMessage.trim();
-  }
-
-  if (typed.error_code?.trim()) {
-    return typed.error_code.trim();
-  }
-
-  return "Gagal menghubungi Xendit.";
+const toXenditErrorPayload = (payload: unknown) => {
+  if (!payload || typeof payload !== "object") return null;
+  return payload as XenditApiErrorPayload;
 };
 
-const requestXendit = async (path: string, options: RequestInit = {}) => {
+const pickNestedErrorMessage = (payload: XenditApiErrorPayload) =>
+  payload.errors?.find((item) => normalizeMessage(item.message))?.message;
+
+const parseXenditErrorMessage = (payload: unknown) => {
+  const typed = toXenditErrorPayload(payload);
+  if (!typed) return DEFAULT_XENDIT_ERROR;
+  return (
+    normalizeMessage(typed.message) ||
+    normalizeMessage(pickNestedErrorMessage(typed)) ||
+    normalizeMessage(typed.error_code) ||
+    DEFAULT_XENDIT_ERROR
+  );
+};
+
+const ensureXenditConfigured = () => {
   if (!XENDIT_SECRET_KEY) {
     throw new ApiError("Xendit belum dikonfigurasi di server.", 500);
   }
+};
+
+const parseXenditJson = async (response: Response) =>
+  (await response.json().catch(() => null)) as
+    | XenditCreateInvoiceResponse
+    | XenditInvoiceDetailResponse
+    | XenditApiErrorPayload
+    | null;
+
+const assertXenditResponse = (
+  response: Response,
+  payload:
+    | XenditCreateInvoiceResponse
+    | XenditInvoiceDetailResponse
+    | XenditApiErrorPayload
+    | null,
+) => {
+  if (!response.ok) throw new ApiError(parseXenditErrorMessage(payload), 502);
+  if (!payload || typeof payload !== "object") {
+    throw new ApiError("Respons Xendit tidak valid.", 502);
+  }
+};
+
+const requestXendit = async (path: string, options: RequestInit = {}) => {
+  ensureXenditConfigured();
 
   const response = await fetch(`${XENDIT_API_BASE_URL}${path}`, {
     ...options,
@@ -77,20 +101,8 @@ const requestXendit = async (path: string, options: RequestInit = {}) => {
     },
   });
 
-  const json = (await response.json().catch(() => null)) as
-    | XenditCreateInvoiceResponse
-    | XenditInvoiceDetailResponse
-    | XenditApiErrorPayload
-    | null;
-
-  if (!response.ok) {
-    throw new ApiError(parseXenditErrorMessage(json), 502);
-  }
-
-  if (!json || typeof json !== "object") {
-    throw new ApiError("Respons Xendit tidak valid.", 502);
-  }
-
+  const json = await parseXenditJson(response);
+  assertXenditResponse(response, json);
   return json;
 };
 

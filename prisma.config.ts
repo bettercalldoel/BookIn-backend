@@ -2,6 +2,7 @@ import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
 const databaseUrl = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
+const shadowDatabaseUrl = process.env.SHADOW_DATABASE_URL;
 if (!databaseUrl) {
   throw new Error("DIRECT_URL or DATABASE_URL is required for Prisma.");
 }
@@ -13,5 +14,6 @@ export default defineConfig({
   },
   datasource: {
     url: databaseUrl,
+    ...(shadowDatabaseUrl ? { shadowDatabaseUrl } : {}),
   },
 });

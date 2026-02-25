@@ -1,64 +1,86 @@
 import { PrismaClient } from "@prisma/client";
 import { ApiError } from "../../utils/api-error.js";
-
-type CityResult = {
-  id: string;
-  name: string;
-  province?: string | null;
-};
-
-type CategoryResult = {
-  id: string;
-  name: string;
-};
+import {
+  CategoryResult,
+  CityResult,
+  ListMeta,
+  ListOptions,
+} from "./catalog.types.js";
+import {
+  buildListMeta,
+  toCategoryResult,
+  toCityResult,
+} from "./catalog.utils.js";
 
 export class CatalogService {
   constructor(private prisma: PrismaClient) {}
 
-  listCities = async (search: string, limit: number): Promise<CityResult[]> => {
-    const cities = await this.prisma.city.findMany({
-      where: search
-        ? { name: { contains: search, mode: "insensitive" } }
-        : undefined,
-      orderBy: { name: "asc" },
-      take: limit,
-      select: {
-        id: true,
-        name: true,
-        provinceName: true,
-      },
-    });
+  listCities = async (
+    search: string,
+    options: ListOptions,
+  ): Promise<{ data: CityResult[]; meta: ListMeta }> => {
+    const where = search
+      ? { name: { contains: search, mode: "insensitive" as const } }
+      : undefined;
+    const skip = (options.page - 1) * options.limit;
 
-    return cities.map((city) => ({
-      id: city.id.toString(),
-      name: city.name,
-      province: city.provinceName,
-    }));
+    const [cities, total] = await this.prisma.$transaction([
+      this.prisma.city.findMany({
+        where,
+        orderBy: { name: options.sortOrder },
+        skip,
+        take: options.limit,
+        select: {
+          id: true,
+          name: true,
+          provinceName: true,
+        },
+      }),
+      this.prisma.city.count({ where }),
+    ]);
+
+    const data = cities.map(toCityResult);
+
+    return {
+      data,
+      meta: buildListMeta(options.page, options.limit, total),
+    };
   };
 
   listCategories = async (
     tenantAccountId: string,
     search: string,
-    limit: number,
-  ): Promise<CategoryResult[]> => {
-    const categories = await this.prisma.propertyCategory.findMany({
-      where: {
-        tenantAccountId,
-        isActive: true,
-        ...(search ? { name: { contains: search, mode: "insensitive" } } : {}),
-      },
-      orderBy: { name: "asc" },
-      take: limit,
-      select: {
-        id: true,
-        name: true,
-      },
-    });
+    options: ListOptions,
+  ): Promise<{ data: CategoryResult[]; meta: ListMeta }> => {
+    const where = {
+      tenantAccountId,
+      isActive: true,
+      ...(search
+        ? { name: { contains: search, mode: "insensitive" as const } }
+        : {}),
+    };
+    const skip = (options.page - 1) * options.limit;
 
-    return categories.map((category) => ({
-      id: category.id.toString(),
-      name: category.name,
-    }));
+    const [categories, total] = await this.prisma.$transaction([
+      this.prisma.propertyCategory.findMany({
+        where,
+        orderBy: { name: options.sortOrder },
+        skip,
+        take: options.limit,
+        select: {
+          id: true,
+          name: true,
+        },
+      }),
+      this.prisma.propertyCategory.count({ where }),
+    ]);
+
+    const data = categories.map(toCategoryResult);
+
+    return {
+      data,
+      meta: buildListMeta(options.page, options.limit, total),
+    };
   };
 
   createCategory = async (
@@ -66,7 +88,7 @@ export class CatalogService {
     name: string,
   ): Promise<CategoryResult> => {
     const trimmedName = name.trim();
-    const existing = await this.prisma.propertyCategory.findFirst({
+    const existingCategory = await this.prisma.propertyCategory.findFirst({
       where: {
         tenantAccountId,
         name: { equals: trimmedName, mode: "insensitive" },
@@ -74,11 +96,8 @@ export class CatalogService {
       select: { id: true, name: true },
     });
 
-    if (existing) {
-      return {
-        id: existing.id.toString(),
-        name: existing.name,
-      };
+    if (existingCategory) {
+      return toCategoryResult(existingCategory);
     }
 
     const created = await this.prisma.propertyCategory.create({
@@ -89,10 +108,7 @@ export class CatalogService {
       select: { id: true, name: true },
     });
 
-    return {
-      id: created.id.toString(),
-      name: created.name,
-    };
+    return toCategoryResult(created);
   };
 
   updateCategory = async (
@@ -136,10 +152,7 @@ export class CatalogService {
       select: { id: true, name: true },
     });
 
-    return {
-      id: updated.id.toString(),
-      name: updated.name,
-    };
+    return toCategoryResult(updated);
   };
 
   deleteCategory = async (

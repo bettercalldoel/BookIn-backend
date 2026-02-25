@@ -1,13 +1,401 @@
-// schema.prisma
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
   provider = "postgresql"
-  // Connection URLs are no longer allowed in schema files (Prisma v7+).
-  // Move migration connection URLs to prisma.config.ts and pass an adapter
-  // or accelerateUrl to the PrismaClient constructor as needed.
+}
+
+model Account {
+  id                                        String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                                     String                   @unique @db.Citext
+  passwordHash                              String?                  @map("password_hash")
+  type                                      AccountType              @map("account_type")
+  isVerified                                Boolean                  @default(false) @map("is_verified")
+  verifiedAt                                DateTime?                @map("verified_at") @db.Timestamptz(6)
+  avatarUrl                                 String?                  @map("avatar_url")
+  createdAt                                 DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                                 DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  lastLoginAt                               DateTime?                @map("last_login_at") @db.Timestamptz(6)
+  tenantBookings                            Booking[]                @relation("TenantBookings")
+  bookings                                  Booking[]                @relation("UserBookings")
+  emailTokens                               EmailVerificationToken[]
+  oauthAccounts                             OAuthAccount[]
+  resetTokens                               PasswordResetToken[]
+  properties                                Property[]               @relation("TenantProperties")
+  categories                                PropertyCategory[]       @relation("TenantCategories")
+  rateRules                                 RateRule[]
+  tenantScopedRateRules                     RateRule[]               @relation("rate_rules_tenant_idToaccounts")
+  reviewsAsTenant                           Review[]                 @relation("reviews_tenant_idToaccounts")
+  reviewsAsUser                             Review[]                 @relation("reviews_user_idToaccounts")
+  tenantProfile                             TenantProfile?
+  userProfile                               UserProfile?
+
+  @@map("accounts")
+}
+
+model UserProfile {
+  accountId   String    @id @map("account_id") @db.Uuid
+  fullName    String    @map("full_name")
+  phone       String?
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  account     Account   @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("user_profiles")
+}
+
+model TenantProfile {
+  accountId   String   @id @map("account_id") @db.Uuid
+  displayName String   @map("display_name")
+  phone       String?
+  bio         String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("tenant_profiles")
+}
+
+model OAuthAccount {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId      String       @map("account_id") @db.Uuid
+  provider       AuthProvider
+  providerUserId String       @map("provider_user_id")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  account        Account      @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([accountId, provider])
+  @@unique([provider, providerUserId])
+  @@index([accountId], map: "idx_oauth_account_account_id")
+  @@map("oauth_accounts")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId String    @map("account_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([accountId], map: "idx_evt_account_id")
+  @@index([expiresAt], map: "idx_evt_expires_at")
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId String    @map("account_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([accountId], map: "idx_prt_account_id")
+  @@index([expiresAt], map: "idx_prt_expires_at")
+  @@map("password_reset_tokens")
+}
+
+model Province {
+  id   Int    @id
+  name String @unique
+
+  @@map("provinces")
+}
+
+model City {
+  id           BigInt     @id @default(autoincrement())
+  name         String
+  provinceName String?    @map("province")
+  country      String     @default("Indonesia")
+  provinceId   Int?       @map("province_id")
+  properties   Property[]
+
+  @@unique([name, provinceName, country])
+  @@index([provinceId], map: "idx_cities_province_id")
+  @@map("cities")
+}
+
+model PropertyCategory {
+  id              BigInt     @id @default(autoincrement())
+  tenantAccountId String     @map("tenant_id") @db.Uuid
+  name            String     @db.Citext
+  isSystem        Boolean    @default(false) @map("is_system")
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime   @default(now()) @map("updated_at") @db.Timestamptz(6)
+  isActive        Boolean    @default(true) @map("is_active")
+  properties      Property[]
+  tenant          Account    @relation("TenantCategories", fields: [tenantAccountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tenantAccountId, name], map: "uq_category_tenant_name")
+  @@unique([tenantAccountId, name], map: "ux_property_categories_tenant_name", where: raw("(tenant_id IS NOT NULL)"))
+  @@map("property_categories")
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model Property {
+  id                   String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantAccountId      String           @map("tenant_id") @db.Uuid
+  categoryId           BigInt           @map("category_id")
+  cityId               BigInt           @map("city_id")
+  name                 String           @db.VarChar(160)
+  description          String
+  address              String?
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
+  amenityKeys          String[]         @default([]) @map("amenity_keys")
+  latitude             Decimal?         @db.Decimal(10, 7)
+  longitude            Decimal?         @db.Decimal(10, 7)
+  breakfastEnabled     Boolean          @default(false) @map("breakfast_enabled")
+  breakfastPricePerPax Decimal          @default(0) @map("breakfast_price_per_pax") @db.Decimal
+  breakfastCurrency    String           @default("IDR") @map("breakfast_currency") @db.VarChar(3)
+  breakfastUpdatedAt   DateTime         @default(now()) @map("breakfast_updated_at") @db.Timestamptz(6)
+  bookings             Booking[]
+  category             PropertyCategory @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  city                 City             @relation(fields: [cityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tenant               Account          @relation("TenantProperties", fields: [tenantAccountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  images               PropertyImage[]
+  rateRules            RateRule[]       @relation("RateRuleProperty")
+  reviews              Review[]
+  roomTypes            RoomType[]
+
+  @@index([amenityKeys], map: "idx_properties_amenity_keys_gin", type: Gin)
+  @@index([categoryId], map: "idx_properties_category_id")
+  @@index([cityId], map: "idx_properties_city_id")
+  @@index([tenantAccountId], map: "idx_properties_tenant_id")
+  @@map("properties")
+}
+
+model PropertyImage {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  propertyId String   @map("property_id") @db.Uuid
+  url        String
+  sortOrder  Int      @default(0) @map("sort_order")
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([propertyId], map: "idx_property_images_property_id")
+  @@map("property_images")
+}
+
+model RoomType {
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  propertyId     String             @map("property_id") @db.Uuid
+  name           String             @db.VarChar(120)
+  description    String
+  basePrice      Decimal            @map("base_price") @db.Decimal(12, 2)
+  maxGuests      Int                @map("capacity")
+  totalUnits     Int                @map("total_units")
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  bookings       Booking[]
+  rateRules      RateRule[]         @relation("RateRuleRoomType")
+  reviews        Review[]
+  roomBlockouts  RoomBlockout[]
+  roomImages     RoomImage[]
+  calendar       RoomTypeCalendar[]
+  property       Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([propertyId, name])
+  @@index([basePrice], map: "idx_room_types_base_price")
+  @@index([propertyId], map: "idx_room_types_property_id")
+  @@map("room_types")
+}
+
+model RoomTypeCalendar {
+  roomTypeId     String   @map("room_type_id") @db.Uuid
+  date           DateTime @db.Date
+  availableUnits Int      @map("available_units")
+  price          Decimal  @db.Decimal
+  isClosed       Boolean  @default(false) @map("is_closed")
+  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  roomType       RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([roomTypeId, date], map: "pk_room_calendar")
+  @@index([date], map: "idx_room_type_calendar_date")
+  @@index([roomTypeId, date], map: "idx_room_calendar_room_date")
+  @@map("room_type_calendar")
+}
+
+model RateRule {
+  id                                      String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                                String         @map("tenant_id") @db.Uuid
+  scope                                   RateScope
+  propertyId                              String?        @map("property_id") @db.Uuid
+  roomTypeId                              String?        @map("room_type_id") @db.Uuid
+  adjustmentType                          AdjustmentType @map("adjustment_type")
+  value                                   Decimal        @map("value") @db.Decimal(12, 2)
+  startDate                               DateTime       @map("start_date") @db.Date
+  endDate                                 DateTime       @map("end_date") @db.Date
+  priority                                Int            @default(0) @map("priority")
+  label                                   String?        @map("label")
+  isActive                                Boolean        @default(true) @map("is_active")
+  createdAt                               DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                               DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
+  tenantAccountId                         String         @map("tenant_account_id") @db.Uuid
+  name                                    String         @db.VarChar(160)
+  adjustmentValue                         Decimal        @map("adjustment_value") @db.Decimal
+  property                                Property?      @relation("RateRuleProperty", fields: [propertyId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  roomType                                RoomType?      @relation("RateRuleRoomType", fields: [roomTypeId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenantAccount                           Account        @relation(fields: [tenantAccountId], references: [id], onUpdate: NoAction)
+  tenantOwner                             Account        @relation("rate_rules_tenant_idToaccounts", fields: [tenantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([tenantAccountId], map: "idx_rate_rules_tenant")
+  @@index([propertyId], map: "idx_rate_rules_property")
+  @@index([roomTypeId], map: "idx_rate_rules_room_type")
+  @@index([propertyId, startDate, endDate], map: "idx_rate_rules_property_dates", where: raw("(scope = 'PROPERTY'::rate_scope)"))
+  @@index([roomTypeId, startDate, endDate], map: "idx_rate_rules_room_type_dates", where: raw("(scope = 'ROOM_TYPE'::rate_scope)"))
+  @@map("rate_rules")
+}
+
+model Booking {
+  id                    String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderNo               String         @unique @map("order_no")
+  userId                String         @map("user_id") @db.Uuid
+  tenantId              String         @map("tenant_id") @db.Uuid
+  propertyId            String         @map("property_id") @db.Uuid
+  roomTypeId            String         @map("room_type_id") @db.Uuid
+  checkIn               DateTime       @map("check_in") @db.Date
+  checkOut              DateTime       @map("check_out") @db.Date
+  guests                Int
+  rooms                 Int
+  baseTotal             Decimal        @map("base_total") @db.Decimal(12, 2)
+  adjustmentTotal       Decimal        @default(0) @map("adjustment_total") @db.Decimal(12, 2)
+  totalAmount           Decimal        @map("total_amount") @db.Decimal(12, 2)
+  status                OrderStatus    @default(MENUNGGU_PEMBAYARAN)
+  cancelledBy           CancelledBy?   @map("cancelled_by")
+  cancelledAt           DateTime?      @map("cancelled_at") @db.Timestamptz(6)
+  proofDueAt            DateTime?      @map("proof_due_at") @db.Timestamptz(6)
+  paymentDueAt          DateTime       @map("payment_due_at") @db.Timestamptz(6)
+  paymentConfirmedAt    DateTime?      @map("payment_confirmed_at") @db.Timestamptz(6)
+  createdAt             DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
+  paymentMethod         PaymentMethod  @default(MANUAL_TRANSFER) @map("payment_method")
+  xenditInvoiceId       String?        @unique(map: "uq_bookings_xendit_invoice_id") @map("xendit_invoice_id")
+  xenditInvoiceUrl      String?        @map("xendit_invoice_url")
+  xenditInvoiceStatus   String?        @map("xendit_invoice_status")
+  checkInReminderSentAt DateTime?      @map("check_in_reminder_sent_at") @db.Timestamptz(6)
+  roomSubtotal          Decimal        @default(0) @map("room_subtotal") @db.Decimal
+  breakfastSelected     Boolean        @default(false) @map("breakfast_selected")
+  breakfastPax          Int            @default(0) @map("breakfast_pax")
+  breakfastUnitPrice    Decimal        @default(0) @map("breakfast_unit_price") @db.Decimal
+  breakfastNights       Int            @default(0) @map("breakfast_nights")
+  breakfastTotal        Decimal        @default(0) @map("breakfast_total") @db.Decimal
+  subtotalAmount        Decimal        @default(0) @map("subtotal_amount") @db.Decimal
+  appFeeRate            Decimal        @default(0.02) @map("app_fee_rate") @db.Decimal
+  appFeeAmount          Decimal        @default(0) @map("app_fee_amount") @db.Decimal
+  taxRate               Decimal        @default(0.11) @map("tax_rate") @db.Decimal
+  taxAmount             Decimal        @default(0) @map("tax_amount") @db.Decimal
+  tenantFeeRate         Decimal        @default(0.05) @map("tenant_fee_rate") @db.Decimal
+  tenantFeeAmount       Decimal        @default(0) @map("tenant_fee_amount") @db.Decimal
+  tenantPayoutAmount    Decimal        @default(0) @map("tenant_payout_amount") @db.Decimal
+  currency              String         @default("IDR") @db.VarChar(3)
+  pricingVersion        Int            @default(1) @map("pricing_version")
+  nights                BookingNight[]
+  property              Property       @relation(fields: [propertyId], references: [id], onUpdate: NoAction)
+  roomType              RoomType       @relation(fields: [roomTypeId], references: [id], onUpdate: NoAction)
+  tenant                Account        @relation("TenantBookings", fields: [tenantId], references: [id], onUpdate: NoAction)
+  user                  Account        @relation("UserBookings", fields: [userId], references: [id], onUpdate: NoAction)
+  paymentProofs         PaymentProof?
+  review                Review?
+
+  @@index([status, paymentDueAt], map: "idx_bookings_payment_due")
+  @@index([status, proofDueAt], map: "idx_bookings_proof_due")
+  @@index([tenantId, status, createdAt(sort: Desc)], map: "idx_bookings_tenant_status_date")
+  @@index([userId, createdAt(sort: Desc)], map: "idx_bookings_user_date")
+  @@map("bookings")
+}
+
+model BookingNight {
+  bookingId        String   @map("booking_id") @db.Uuid
+  stayDate         DateTime @map("stay_date") @db.Date
+  basePrice        Decimal  @map("base_price") @db.Decimal(12, 2)
+  adjustmentAmount Decimal  @default(0) @map("adjustment_amount") @db.Decimal(12, 2)
+  finalPrice       Decimal  @map("final_price") @db.Decimal(12, 2)
+  booking          Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([bookingId, stayDate])
+  @@index([stayDate], map: "idx_booking_nights_stay_date")
+  @@map("booking_nights")
+}
+
+model PaymentProof {
+  id          String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId   String             @unique @map("booking_id") @db.Uuid
+  method      PaymentMethod      @default(MANUAL_TRANSFER) @map("method")
+  status      PaymentProofStatus @default(SUBMITTED)
+  imageUrl    String             @map("image_url")
+  submittedAt DateTime           @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  reviewedAt  DateTime?          @map("reviewed_at") @db.Timestamptz(6)
+  reviewNotes String?            @map("review_notes")
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  booking     Booking            @relation(fields: [bookingId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([status], map: "idx_payment_proofs_status")
+  @@map("payment_proofs")
+}
+
+model Review {
+  id                                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId                            String    @unique @map("booking_id") @db.Uuid
+  propertyId                           String    @map("property_id") @db.Uuid
+  roomTypeId                           String    @map("room_type_id") @db.Uuid
+  userId                               String    @map("user_id") @db.Uuid
+  tenantId                             String    @map("tenant_id") @db.Uuid
+  rating                               Int?      @db.SmallInt
+  comment                              String
+  tenantReply                          String?   @map("tenant_reply")
+  repliedAt                            DateTime? @map("replied_at") @db.Timestamptz(6)
+  createdAt                            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  tenantRepliedAt                      DateTime? @map("tenant_replied_at") @db.Timestamptz(6)
+  updatedAt                            DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  booking                              Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  property                             Property  @relation(fields: [propertyId], references: [id], onUpdate: NoAction)
+  roomType                             RoomType  @relation(fields: [roomTypeId], references: [id], onUpdate: NoAction)
+  tenantAccount                        Account   @relation("reviews_tenant_idToaccounts", fields: [tenantId], references: [id], onUpdate: NoAction)
+  userAccount                          Account   @relation("reviews_user_idToaccounts", fields: [userId], references: [id], onUpdate: NoAction)
+
+  @@index([propertyId, createdAt(sort: Desc)], map: "idx_reviews_property_id")
+  @@index([tenantId, createdAt(sort: Desc)], map: "idx_reviews_tenant_id")
+  @@map("reviews")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model kv_store_43b4e72b {
+  key   String @id
+  value Json
+
+  @@index([key])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model RoomBlockout {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomTypeId   String   @map("room_type_id") @db.Uuid
+  startDate    DateTime @map("start_date") @db.Date
+  endDate      DateTime @map("end_date") @db.Date
+  blockedUnits Int?     @map("blocked_units")
+  reason       String?
+  createdAt    DateTime @map("created_at") @default(now()) @db.Timestamptz(6)
+  roomType     RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([roomTypeId, startDate, endDate], map: "idx_room_blockouts_room_type_dates")
+  @@map("room_blockouts")
+}
+
+model RoomImage {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomTypeId String   @map("room_type_id") @db.Uuid
+  url        String
+  sortOrder  Int      @default(0) @map("sort_order")
+  roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([roomTypeId], map: "idx_room_images_room_type_id")
+  @@map("room_images")
 }
 
 enum AccountType {
@@ -25,7 +413,6 @@ enum AuthProvider {
 
   @@map("auth_provider")
 }
-
 
 enum OrderStatus {
   MENUNGGU_PEMBAYARAN
@@ -74,390 +461,25 @@ enum RateScope {
   @@map("rate_scope")
 }
 
-// =====================
-// Accounts & Auth
-// =====================
-model Account {
-  id              String       @id @default(uuid()) @db.Uuid
-  email           String       @unique @db.Citext
-  passwordHash    String?      @map("password_hash")
-  type            AccountType  @map("account_type")
-  isVerified      Boolean      @default(false) @map("is_verified")
-  verifiedAt      DateTime?    @map("verified_at") @db.Timestamptz(6)
-  avatarUrl       String?      @map("avatar_url")
-  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
-  lastLoginAt     DateTime?    @map("last_login_at") @db.Timestamptz(6)
+enum public_AdjustmentType {
+  PERCENT
+  NOMINAL
 
-  userProfile     UserProfile?
-  tenantProfile   TenantProfile?
-
-  oauthAccounts   OAuthAccount[]
-  emailTokens     EmailVerificationToken[]
-  resetTokens     PasswordResetToken[]
-
-  categories        PropertyCategory[] @relation("TenantCategories")
-  properties        Property[]         @relation("TenantProperties")
-
-  bookings          Booking[]          @relation("UserBookings")
-  tenantBookings    Booking[]          @relation("TenantBookings")
-
-  rateRules       RateRule[]
-
-  @@index([type], map: "idx_accounts_type")
-  @@map("accounts")
+  @@map("AdjustmentType")
 }
 
-model UserProfile {
-  accountId String  @id @map("account_id") @db.Uuid
-  fullName  String  @map("full_name") @db.Text
-  phone     String? @db.Text
-  dateOfBirth DateTime? @map("date_of_birth") @db.Date
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+enum public_AuthProvider {
+  EMAIL
+  GOOGLE
+  FACEBOOK
+  TWITTER
 
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@map("user_profiles")
+  @@map("AuthProvider")
 }
 
-model TenantProfile {
-  accountId   String  @id @map("account_id") @db.Uuid
-  displayName String  @map("display_name") @db.Text
-  phone       String? @db.Text
-  bio         String? @db.Text
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-
-  account     Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@map("tenant_profiles")
-}
-
-model OAuthAccount {
-  id             String       @id @default(uuid()) @db.Uuid
-  accountId      String       @map("account_id") @db.Uuid
-  provider       AuthProvider
-  providerUserId String       @map("provider_user_id") @db.VarChar(255)
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  account        Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerUserId], map: "uq_oauth_provider_user")
-  @@index([accountId], map: "idx_oauth_accounts_account")
-  @@map("oauth_accounts")
-}
-
-model EmailVerificationToken {
-  id        String   @id @default(uuid()) @db.Uuid
-  accountId String   @map("account_id") @db.Uuid
-  tokenHash String   @unique @map("token_hash")
-  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
-  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@index([accountId], map: "idx_evt_account")
-  @@index([expiresAt], map: "idx_evt_expires")
-  @@map("email_verification_tokens")
-}
-
-model PasswordResetToken {
-  id        String   @id @default(uuid()) @db.Uuid
-  accountId String   @map("account_id") @db.Uuid
-  tokenHash String   @unique @map("token_hash")
-  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
-  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@index([accountId], map: "idx_prt_account")
-  @@index([expiresAt], map: "idx_prt_expires")
-  @@map("password_reset_tokens")
-}
-
-// =====================
-// Master Data (Indonesia)
-// =====================
-model Province {
-  id    Int    @id
-  name  String @db.Text
-
-  cities City[]
-
-  @@map("provinces")
-}
-
-model City {
-  id           BigInt   @id @default(autoincrement()) @db.BigInt
-  name         String   @db.Text
-
-  provinceName String?  @map("province") @db.Text
-
-  country      String?  @db.Text
-
-  provinceId   Int?     @map("province_id")
-  province     Province? @relation(fields: [provinceId], references: [id], onDelete: Restrict)
-
-  properties   Property[]
-
-  @@index([provinceId], map: "idx_cities_province_id")
-  @@index([name], map: "idx_cities_name")
-  @@map("cities")
-}
-
-// =====================
-// Property Catalog
-// =====================
-model PropertyCategory {
-  id              BigInt  @id @default(autoincrement()) @db.BigInt
-  tenantAccountId String  @map("tenant_id") @db.Uuid
-  name            String  @db.Citext
-  isSystem        Boolean @default(false) @map("is_system")
-
-  // untuk "hapus" category tanpa error FK: set false
-  isActive        Boolean @default(true) @map("is_active")
-
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-
-  tenant          Account  @relation("TenantCategories", fields: [tenantAccountId], references: [id], onDelete: Restrict)
-  properties      Property[]
-
-  @@unique([tenantAccountId, name], map: "uq_category_tenant_name")
-  @@index([tenantAccountId], map: "idx_property_categories_tenant")
-  @@index([isActive], map: "idx_property_categories_active")
-  @@map("property_categories")
-}
-
-model Property {
-  id              String   @id @default(uuid()) @db.Uuid
-  tenantAccountId String   @map("tenant_id") @db.Uuid
-  categoryId      BigInt   @map("category_id") @db.BigInt
-
-  cityId          BigInt   @map("city_id") @db.BigInt
-
-  name            String   @db.VarChar(160)
-  description     String
-  address         String?
-
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-
-  tenant          Account          @relation("TenantProperties", fields: [tenantAccountId], references: [id], onDelete: Restrict)
-  category        PropertyCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  city            City             @relation(fields: [cityId], references: [id], onDelete: Restrict)
-
-  images          PropertyImage[]
-  roomTypes       RoomType[]
-  bookings        Booking[]
-  rateRules       RateRule[] @relation("RateRuleProperty")
-
-  @@index([tenantAccountId], map: "idx_properties_tenant")
-  @@index([cityId], map: "idx_properties_city")
-  @@index([categoryId], map: "idx_properties_category")
-  @@index([name], map: "idx_properties_name")
-  @@map("properties")
-}
-
-model PropertyImage {
-  id         String   @id @default(uuid()) @db.Uuid
-  propertyId String   @map("property_id") @db.Uuid
-  url        String
-  sortOrder  Int      @default(0) @map("sort_order")
-
-  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-
-  @@index([propertyId], map: "idx_property_images_property")
-  @@map("property_images")
-}
-
-// =====================
-// Room Types & Calendar
-// =====================
-model RoomType {
-  id          String   @id @default(uuid()) @db.Uuid
-  propertyId  String   @map("property_id") @db.Uuid
-
-  name        String   @db.VarChar(120)
-  description String
-  basePrice   Decimal  @map("base_price")
-  totalUnits  Int      @map("total_units")
-  maxGuests   Int      @map("capacity")
-
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-
-  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-
-  calendar    RoomTypeCalendar[]
-  rateRules   RateRule[] @relation("RateRuleRoomType")
-  bookings    Booking[]
-
-  @@unique([propertyId, name], map: "uq_room_types_property_name")
-  @@index([propertyId], map: "idx_room_types_property")
-  @@map("room_types")
-}
-
-model RoomTypeCalendar {
-  roomTypeId     String   @map("room_type_id") @db.Uuid
-  date           DateTime @db.Date
-  availableUnits Int      @map("available_units")
-  price          Decimal
-  isClosed       Boolean  @default(false) @map("is_closed")
-  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-
-  roomType       RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
-
-  @@id([roomTypeId, date], map: "pk_room_calendar")
-  @@index([date], map: "idx_room_type_calendar_date")
-  @@index([roomTypeId, date], map: "idx_room_calendar_room_date")
-  @@map("room_type_calendar")
-}
-
-// =====================
-// Pricing Rules
-// =====================
-model RateRule {
-  id              String         @id @default(uuid()) @db.Uuid
-  tenantId        String         @map("tenant_id") @db.Uuid
-  tenantAccountId String         @map("tenant_account_id") @db.Uuid
-
-  scope           RateScope
-  propertyId      String?        @map("property_id") @db.Uuid
-  roomTypeId      String?        @map("room_type_id") @db.Uuid
-
-  name            String         @db.VarChar(160)
-  startDate       DateTime       @map("start_date") @db.Date
-  endDate         DateTime       @map("end_date") @db.Date
-
-  adjustmentType  AdjustmentType @map("adjustment_type")
-  value           Decimal        @map("value")
-  adjustmentValue Decimal        @map("adjustment_value")
-
-  priority        Int            @default(0) @map("priority")
-  label           String?        @map("label") @db.Text
-
-  isActive        Boolean        @default(true) @map("is_active")
-  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
-
-  tenant          Account        @relation(fields: [tenantAccountId], references: [id], onDelete: Restrict)
-  property        Property?      @relation("RateRuleProperty", fields: [propertyId], references: [id], onDelete: Cascade)
-  roomType        RoomType?      @relation("RateRuleRoomType", fields: [roomTypeId], references: [id], onDelete: Cascade)
-
-  @@index([tenantAccountId], map: "idx_rate_rules_tenant")
-  @@index([propertyId], map: "idx_rate_rules_property")
-  @@index([roomTypeId], map: "idx_rate_rules_room_type")
-  @@map("rate_rules")
-}
-
-// =====================
-// Booking / Payments / Reviews
-// =====================
-model Booking {
-  id               String      @id @default(uuid()) @db.Uuid
-  orderNo          String      @unique @map("order_no") @db.Text
-
-  userId           String      @map("user_id") @db.Uuid
-  tenantId         String      @map("tenant_id") @db.Uuid
-  propertyId       String      @map("property_id") @db.Uuid
-  roomTypeId       String      @map("room_type_id") @db.Uuid
-
-  checkIn          DateTime    @map("check_in") @db.Date
-  checkOut         DateTime    @map("check_out") @db.Date
-
-  guests           Int
-  rooms            Int
-
-  baseTotal        Decimal     @map("base_total")
-  adjustmentTotal  Decimal     @map("adjustment_total")
-  totalAmount      Decimal     @map("total_amount")
-  paymentMethod    PaymentMethod @default(MANUAL_TRANSFER) @map("payment_method")
-
-  status           OrderStatus @default(MENUNGGU_PEMBAYARAN)
-
-  cancelledBy      CancelledBy? @map("cancelled_by")
-  cancelledAt      DateTime?   @map("cancelled_at") @db.Timestamptz(6)
-
-  proofDueAt       DateTime?   @map("proof_due_at") @db.Timestamptz(6)
-  paymentDueAt     DateTime    @map("payment_due_at") @db.Timestamptz(6)
-  paymentConfirmedAt DateTime? @map("payment_confirmed_at") @db.Timestamptz(6)
-  checkInReminderSentAt DateTime? @map("check_in_reminder_sent_at") @db.Timestamptz(6)
-  xenditInvoiceId  String?     @unique(map: "uq_bookings_xendit_invoice_id") @map("xendit_invoice_id")
-  xenditInvoiceUrl String?     @map("xendit_invoice_url")
-  xenditInvoiceStatus String?  @map("xendit_invoice_status")
-
-  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
-
-  roomType         RoomType    @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
-  property         Property    @relation(fields: [propertyId], references: [id], onDelete: Restrict)
-  user             Account     @relation("UserBookings", fields: [userId], references: [id], onDelete: Restrict)
-  tenant           Account     @relation("TenantBookings", fields: [tenantId], references: [id], onDelete: Restrict)
-
-  paymentProofs    PaymentProof[]
-  nights           BookingNight[]
-  review           Review?
-
-  @@index([roomTypeId], map: "idx_bookings_room_type")
-  @@index([userId], map: "idx_bookings_user")
-  @@index([status], map: "idx_bookings_status")
-  @@index([createdAt], map: "idx_bookings_created")
-  @@index([paymentDueAt], map: "idx_bookings_payment_due")
-  @@index([proofDueAt], map: "idx_bookings_proof_due")
-  @@index([checkIn], map: "idx_bookings_check_in")
-  @@index([checkOut], map: "idx_bookings_check_out")
-  @@map("bookings")
-}
-
-model BookingNight {
-  bookingId       String   @map("booking_id") @db.Uuid
-  stayDate        DateTime @map("stay_date") @db.Date
-  basePrice       Decimal  @map("base_price")
-  adjustmentAmount Decimal @map("adjustment_amount")
-  finalPrice      Decimal  @map("final_price")
-
-  booking         Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-
-  @@id([bookingId, stayDate])
-  @@index([stayDate], map: "idx_booking_nights_date")
-  @@index([bookingId], map: "idx_booking_nights_booking")
-  @@map("booking_nights")
-}
-
-model PaymentProof {
-  id                 String             @id @default(uuid()) @db.Uuid
-  bookingId           String             @map("booking_id") @db.Uuid
-  method             PaymentMethod      @map("method")
-  status             PaymentProofStatus @default(SUBMITTED)
-  imageUrl           String             @map("image_url")
-
-  submittedAt        DateTime           @default(now()) @map("submitted_at") @db.Timestamptz(6)
-  reviewedAt         DateTime?          @map("reviewed_at") @db.Timestamptz(6)
-  reviewNotes        String?            @map("review_notes")
-  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  booking            Booking            @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-
-  @@index([bookingId], map: "idx_payment_proofs_booking")
-  @@index([status], map: "idx_payment_proofs_status")
-  @@map("payment_proofs")
-}
-
-model Review {
-  id              String   @id @default(uuid()) @db.Uuid
-  bookingId       String   @unique @map("booking_id") @db.Uuid
-  rating          Int
-  comment         String
-  tenantReply     String?  @map("tenant_reply")
-  tenantRepliedAt DateTime? @map("tenant_replied_at") @db.Timestamptz(6)
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-
-  booking         Booking  @relation(fields: [bookingId], references: [id], onDelete: Restrict)
-
-  @@map("reviews")
+enum public_RateScope {
+  PROPERTY
+  ROOM_TYPE
+
+  @@map("RateScope")
 }

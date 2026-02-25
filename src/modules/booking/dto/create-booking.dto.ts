@@ -1,11 +1,14 @@
 import { PaymentMethod } from "@prisma/client";
+import { Type } from "class-transformer";
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
   IsOptional,
   IsUUID,
   Min,
+  ValidateIf,
 } from "class-validator";
 
 export class CreateBookingDTO {
@@ -32,4 +35,15 @@ export class CreateBookingDTO {
   @IsOptional()
   @IsEnum(PaymentMethod)
   paymentMethod?: PaymentMethod;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  breakfastSelected?: boolean;
+
+  @ValidateIf((input: CreateBookingDTO) => input.breakfastSelected === true)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  breakfastPax?: number;
 }
