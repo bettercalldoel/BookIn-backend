@@ -28,7 +28,7 @@ export class AuthRouter {
     this.initializeRoutes();
   }
 
-  private initializeRoutes = () => {
+  private initializeRoutes = function (this: AuthRouter) {
     this.router.post(
       "/register/user",
       this.validationMiddleware.validateBody(RegisterUserDTO),

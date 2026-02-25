@@ -29,7 +29,7 @@ export class BookingRouter {
     this.initializeRoutes();
   }
 
-  private initializeRoutes = () => {
+  private initializeRoutes = function (this: BookingRouter) {
     this.router.post(
       "/payment-gateway/xendit/webhook",
       this.bookingController.xenditWebhook,

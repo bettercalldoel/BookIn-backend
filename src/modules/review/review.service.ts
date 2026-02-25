@@ -33,6 +33,10 @@ export class ReviewService {
     return this.prisma.review.create({
       data: {
         bookingId,
+        propertyId: booking.propertyId,
+        roomTypeId: booking.roomTypeId,
+        userId: booking.userId,
+        tenantId: booking.tenantId,
         rating: dto.rating,
         comment: dto.comment,
       },

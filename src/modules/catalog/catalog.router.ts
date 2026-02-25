@@ -20,52 +20,68 @@ export class CatalogRouter {
     this.initializeRoutes();
   }
 
-  private initializeRoutes = () => {
+  private tenantAccessMiddlewares = () => [
+    this.authMiddleware.requireAuth,
+    this.authMiddleware.requireVerifiedAccount,
+    this.authMiddleware.requireAccountType(AccountType.TENANT),
+  ];
+
+  private registerCitiesRoute = () => {
     this.router.get(
       "/cities",
-      this.authMiddleware.requireAuth,
-      this.authMiddleware.requireVerifiedAccount,
-      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      ...this.tenantAccessMiddlewares(),
       this.validationMiddleware.validateQuery(CatalogQueryDTO),
       this.catalogController.getCities,
     );
+  };
 
+  private registerGetCategoriesRoute = () => {
     this.router.get(
       "/categories",
-      this.authMiddleware.requireAuth,
-      this.authMiddleware.requireVerifiedAccount,
-      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      ...this.tenantAccessMiddlewares(),
       this.validationMiddleware.validateQuery(CatalogQueryDTO),
       this.catalogController.getCategories,
     );
+  };
 
+  private registerCreateCategoryRoute = () => {
     this.router.post(
       "/categories",
-      this.authMiddleware.requireAuth,
-      this.authMiddleware.requireVerifiedAccount,
-      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      ...this.tenantAccessMiddlewares(),
       this.validationMiddleware.validateBody(CreateCategoryDTO),
       this.catalogController.createCategory,
     );
+  };
 
+  private registerUpdateCategoryRoute = () => {
     this.router.patch(
       "/categories/:id",
-      this.authMiddleware.requireAuth,
-      this.authMiddleware.requireVerifiedAccount,
-      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      ...this.tenantAccessMiddlewares(),
       this.validationMiddleware.validateParams(CategoryIdParamDTO),
       this.validationMiddleware.validateBody(UpdateCategoryDTO),
       this.catalogController.updateCategory,
     );
+  };
 
+  private registerDeleteCategoryRoute = () => {
     this.router.delete(
       "/categories/:id",
-      this.authMiddleware.requireAuth,
-      this.authMiddleware.requireVerifiedAccount,
-      this.authMiddleware.requireAccountType(AccountType.TENANT),
+      ...this.tenantAccessMiddlewares(),
       this.validationMiddleware.validateParams(CategoryIdParamDTO),
       this.catalogController.deleteCategory,
     );
+  };
+
+  private registerCategoryRoutes = () => {
+    this.registerGetCategoriesRoute();
+    this.registerCreateCategoryRoute();
+    this.registerUpdateCategoryRoute();
+    this.registerDeleteCategoryRoute();
+  };
+
+  private initializeRoutes = () => {
+    this.registerCitiesRoute();
+    this.registerCategoryRoutes();
   };
 
   getRouter = () => {

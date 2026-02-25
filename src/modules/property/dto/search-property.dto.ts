@@ -24,6 +24,14 @@ export class SearchPropertyQueryDTO {
   category?: string;
 
   @IsOptional()
+  @IsString()
+  amenities?: string;
+
+  @IsOptional()
+  @IsIn(["all", "any"])
+  amenities_mode?: "all" | "any";
+
+  @IsOptional()
   @IsIn(["name", "price"])
   sort_by?: "name" | "price";
 
@@ -74,4 +82,8 @@ export class SearchPropertyQueryDTO {
   @IsOptional()
   @IsString()
   country?: string;
+
+  @IsOptional()
+  @IsNumberString()
+  radius_km?: string;
 }

@@ -1,5 +1,323 @@
 -- Align Supabase schema to Prisma models
 
+-- Bootstrap core tables when migration history is replayed on an empty shadow DB.
+CREATE EXTENSION IF NOT EXISTS "citext";
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'account_type') THEN
+    CREATE TYPE "account_type" AS ENUM ('USER', 'TENANT');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'auth_provider') THEN
+    CREATE TYPE "auth_provider" AS ENUM ('EMAIL', 'GOOGLE', 'FACEBOOK', 'TWITTER');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_status') THEN
+    CREATE TYPE "order_status" AS ENUM (
+      'MENUNGGU_PEMBAYARAN',
+      'MENUNGGU_KONFIRMASI_PEMBAYARAN',
+      'DIPROSES',
+      'DIBATALKAN',
+      'SELESAI'
+    );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'cancelled_by') THEN
+    CREATE TYPE "cancelled_by" AS ENUM ('USER', 'TENANT', 'SYSTEM');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_method') THEN
+    CREATE TYPE "payment_method" AS ENUM ('MANUAL_TRANSFER');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_proof_status') THEN
+    CREATE TYPE "payment_proof_status" AS ENUM ('SUBMITTED', 'APPROVED', 'REJECTED');
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS "accounts" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "email" citext NOT NULL,
+  "password_hash" text,
+  "account_type" "account_type" NOT NULL,
+  "is_verified" boolean NOT NULL DEFAULT false,
+  "verified_at" timestamptz(6),
+  "avatar_url" text,
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "last_login_at" timestamptz(6)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "accounts_email_key" ON "accounts" ("email");
+CREATE INDEX IF NOT EXISTS "idx_accounts_type" ON "accounts" ("account_type");
+
+CREATE TABLE IF NOT EXISTS "user_profiles" (
+  "account_id" uuid PRIMARY KEY,
+  "full_name" text NOT NULL,
+  "phone" text,
+  "date_of_birth" date,
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "user_profiles_account_id_fkey"
+    FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "tenant_profiles" (
+  "account_id" uuid PRIMARY KEY,
+  "display_name" text NOT NULL,
+  "phone" text,
+  "bio" text,
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "tenant_profiles_account_id_fkey"
+    FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "oauth_accounts" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "account_id" uuid NOT NULL,
+  "provider" "auth_provider" NOT NULL,
+  "provider_user_id" varchar(255) NOT NULL,
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "oauth_accounts_account_id_fkey"
+    FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_oauth_provider_user"
+  ON "oauth_accounts" ("provider", "provider_user_id");
+CREATE INDEX IF NOT EXISTS "idx_oauth_accounts_account"
+  ON "oauth_accounts" ("account_id");
+
+CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "account_id" uuid NOT NULL,
+  "token_hash" text NOT NULL,
+  "expires_at" timestamptz(6) NOT NULL,
+  "used_at" timestamptz(6),
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "email_verification_tokens_account_id_fkey"
+    FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "email_verification_tokens_token_hash_key"
+  ON "email_verification_tokens" ("token_hash");
+CREATE INDEX IF NOT EXISTS "idx_evt_account"
+  ON "email_verification_tokens" ("account_id");
+CREATE INDEX IF NOT EXISTS "idx_evt_expires"
+  ON "email_verification_tokens" ("expires_at");
+
+CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "account_id" uuid NOT NULL,
+  "token_hash" text NOT NULL,
+  "expires_at" timestamptz(6) NOT NULL,
+  "used_at" timestamptz(6),
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "password_reset_tokens_account_id_fkey"
+    FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "password_reset_tokens_token_hash_key"
+  ON "password_reset_tokens" ("token_hash");
+CREATE INDEX IF NOT EXISTS "idx_prt_account"
+  ON "password_reset_tokens" ("account_id");
+CREATE INDEX IF NOT EXISTS "idx_prt_expires"
+  ON "password_reset_tokens" ("expires_at");
+
+CREATE TABLE IF NOT EXISTS "provinces" (
+  "id" integer PRIMARY KEY,
+  "name" text NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "cities" (
+  "id" bigint PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY,
+  "name" text NOT NULL,
+  "province" text,
+  "country" text,
+  "province_id" integer,
+  CONSTRAINT "cities_province_id_fkey"
+    FOREIGN KEY ("province_id") REFERENCES "provinces" ("id") ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS "idx_cities_province_id" ON "cities" ("province_id");
+CREATE INDEX IF NOT EXISTS "idx_cities_name" ON "cities" ("name");
+
+CREATE TABLE IF NOT EXISTS "property_categories" (
+  "id" bigint PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY,
+  "tenant_id" uuid NOT NULL,
+  "name" citext NOT NULL,
+  "is_system" boolean NOT NULL DEFAULT false,
+  "is_active" boolean NOT NULL DEFAULT true,
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "property_categories_tenant_id_fkey"
+    FOREIGN KEY ("tenant_id") REFERENCES "accounts" ("id") ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_category_tenant_name"
+  ON "property_categories" ("tenant_id", "name");
+CREATE INDEX IF NOT EXISTS "idx_property_categories_tenant"
+  ON "property_categories" ("tenant_id");
+CREATE INDEX IF NOT EXISTS "idx_property_categories_active"
+  ON "property_categories" ("is_active");
+
+CREATE TABLE IF NOT EXISTS "properties" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "tenant_id" uuid NOT NULL,
+  "category_id" bigint NOT NULL,
+  "city_id" bigint NOT NULL,
+  "name" text NOT NULL,
+  "description" text,
+  "address" text,
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "properties_tenant_id_fkey"
+    FOREIGN KEY ("tenant_id") REFERENCES "accounts" ("id") ON DELETE RESTRICT,
+  CONSTRAINT "properties_category_id_fkey"
+    FOREIGN KEY ("category_id") REFERENCES "property_categories" ("id") ON DELETE RESTRICT,
+  CONSTRAINT "properties_city_id_fkey"
+    FOREIGN KEY ("city_id") REFERENCES "cities" ("id") ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS "idx_properties_tenant" ON "properties" ("tenant_id");
+CREATE INDEX IF NOT EXISTS "idx_properties_city" ON "properties" ("city_id");
+CREATE INDEX IF NOT EXISTS "idx_properties_category" ON "properties" ("category_id");
+CREATE INDEX IF NOT EXISTS "idx_properties_name" ON "properties" ("name");
+
+CREATE TABLE IF NOT EXISTS "property_images" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "property_id" uuid NOT NULL,
+  "url" text NOT NULL,
+  "sort_order" integer NOT NULL DEFAULT 0,
+  CONSTRAINT "property_images_property_id_fkey"
+    FOREIGN KEY ("property_id") REFERENCES "properties" ("id") ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS "idx_property_images_property" ON "property_images" ("property_id");
+
+CREATE TABLE IF NOT EXISTS "room_types" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "property_id" uuid NOT NULL,
+  "name" text NOT NULL,
+  "description" text,
+  "base_price" numeric NOT NULL,
+  "total_units" integer NOT NULL,
+  "capacity" integer NOT NULL,
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "room_types_property_id_fkey"
+    FOREIGN KEY ("property_id") REFERENCES "properties" ("id") ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_room_types_property_name"
+  ON "room_types" ("property_id", "name");
+CREATE INDEX IF NOT EXISTS "idx_room_types_property" ON "room_types" ("property_id");
+
+CREATE TABLE IF NOT EXISTS "bookings" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "order_no" text NOT NULL,
+  "user_id" uuid NOT NULL,
+  "tenant_id" uuid NOT NULL,
+  "property_id" uuid NOT NULL,
+  "room_type_id" uuid NOT NULL,
+  "check_in" date NOT NULL,
+  "check_out" date NOT NULL,
+  "guests" integer NOT NULL,
+  "rooms" integer NOT NULL,
+  "base_total" numeric NOT NULL,
+  "adjustment_total" numeric NOT NULL,
+  "total_amount" numeric NOT NULL,
+  "payment_method" "payment_method" NOT NULL DEFAULT 'MANUAL_TRANSFER',
+  "status" "order_status" NOT NULL DEFAULT 'MENUNGGU_PEMBAYARAN',
+  "cancelled_by" "cancelled_by",
+  "cancelled_at" timestamptz(6),
+  "proof_due_at" timestamptz(6),
+  "payment_due_at" timestamptz(6) NOT NULL,
+  "payment_confirmed_at" timestamptz(6),
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "bookings_room_type_id_fkey"
+    FOREIGN KEY ("room_type_id") REFERENCES "room_types" ("id") ON DELETE RESTRICT,
+  CONSTRAINT "bookings_property_id_fkey"
+    FOREIGN KEY ("property_id") REFERENCES "properties" ("id") ON DELETE RESTRICT,
+  CONSTRAINT "bookings_user_id_fkey"
+    FOREIGN KEY ("user_id") REFERENCES "accounts" ("id") ON DELETE RESTRICT,
+  CONSTRAINT "bookings_tenant_id_fkey"
+    FOREIGN KEY ("tenant_id") REFERENCES "accounts" ("id") ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "bookings_order_no_key" ON "bookings" ("order_no");
+CREATE INDEX IF NOT EXISTS "idx_bookings_room_type" ON "bookings" ("room_type_id");
+CREATE INDEX IF NOT EXISTS "idx_bookings_user" ON "bookings" ("user_id");
+CREATE INDEX IF NOT EXISTS "idx_bookings_status" ON "bookings" ("status");
+CREATE INDEX IF NOT EXISTS "idx_bookings_created" ON "bookings" ("created_at");
+CREATE INDEX IF NOT EXISTS "idx_bookings_payment_due" ON "bookings" ("payment_due_at");
+CREATE INDEX IF NOT EXISTS "idx_bookings_proof_due" ON "bookings" ("proof_due_at");
+CREATE INDEX IF NOT EXISTS "idx_bookings_check_in" ON "bookings" ("check_in");
+CREATE INDEX IF NOT EXISTS "idx_bookings_check_out" ON "bookings" ("check_out");
+
+CREATE TABLE IF NOT EXISTS "booking_nights" (
+  "booking_id" uuid NOT NULL,
+  "stay_date" date NOT NULL,
+  "base_price" numeric NOT NULL,
+  "adjustment_amount" numeric NOT NULL,
+  "final_price" numeric NOT NULL,
+  CONSTRAINT "booking_nights_pkey" PRIMARY KEY ("booking_id", "stay_date"),
+  CONSTRAINT "booking_nights_booking_id_fkey"
+    FOREIGN KEY ("booking_id") REFERENCES "bookings" ("id") ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS "idx_booking_nights_date" ON "booking_nights" ("stay_date");
+CREATE INDEX IF NOT EXISTS "idx_booking_nights_booking" ON "booking_nights" ("booking_id");
+
+CREATE TABLE IF NOT EXISTS "payment_proofs" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "booking_id" uuid NOT NULL,
+  "method" "payment_method" NOT NULL,
+  "status" "payment_proof_status" NOT NULL DEFAULT 'SUBMITTED',
+  "image_url" text NOT NULL,
+  "submitted_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "reviewed_at" timestamptz(6),
+  "review_notes" text,
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "payment_proofs_booking_id_fkey"
+    FOREIGN KEY ("booking_id") REFERENCES "bookings" ("id") ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS "idx_payment_proofs_booking" ON "payment_proofs" ("booking_id");
+CREATE INDEX IF NOT EXISTS "idx_payment_proofs_status" ON "payment_proofs" ("status");
+
+CREATE TABLE IF NOT EXISTS "reviews" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "booking_id" uuid NOT NULL,
+  "rating" integer NOT NULL,
+  "comment" text NOT NULL,
+  "tenant_reply" text,
+  "tenant_replied_at" timestamptz(6),
+  "created_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "reviews_booking_id_fkey"
+    FOREIGN KEY ("booking_id") REFERENCES "bookings" ("id") ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "reviews_booking_id_key" ON "reviews" ("booking_id");
+
 -- Guard against too-long names before shrinking varchar sizes
 DO $$
 BEGIN

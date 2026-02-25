@@ -317,7 +317,7 @@ const seedSalesFixture = async (
     totalAmount: "700000",
     createdAt: toDateTime("2026-01-10T10:00:00"),
     paymentConfirmedAt: toDateTime("2026-01-10T11:00:00"),
-    xenditInvoiceStatus: "PAID",
+    xenditInvoiceStatus: "SETTLED",
   });
 
   const bookingFId = await createBooking({

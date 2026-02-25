@@ -14,23 +14,25 @@ type UploadBufferOptions = {
 
 let cloudinaryConfigured = false;
 
-const configureCloudinary = () => {
-  if (cloudinaryConfigured) return;
+const hasMissingCloudinaryConfig = () =>
+  !CLOUDINARY_CLOUD_NAME.trim() ||
+  !CLOUDINARY_API_KEY.trim() ||
+  !CLOUDINARY_API_SECRET.trim();
 
-  if (
-    !CLOUDINARY_CLOUD_NAME.trim() ||
-    !CLOUDINARY_API_KEY.trim() ||
-    !CLOUDINARY_API_SECRET.trim()
-  ) {
-    throw new ApiError("Cloudinary belum dikonfigurasi.", 500);
-  }
-
+const setCloudinaryConfig = () => {
   cloudinary.config({
     cloud_name: CLOUDINARY_CLOUD_NAME,
     api_key: CLOUDINARY_API_KEY,
     api_secret: CLOUDINARY_API_SECRET,
   });
+};
 
+const configureCloudinary = () => {
+  if (cloudinaryConfigured) return;
+  if (hasMissingCloudinaryConfig()) {
+    throw new ApiError("Cloudinary belum dikonfigurasi.", 500);
+  }
+  setCloudinaryConfig();
   cloudinaryConfigured = true;
 };
 

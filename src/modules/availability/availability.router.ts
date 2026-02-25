@@ -23,7 +23,7 @@ export class AvailabilityRouter {
     this.initializeRoutes();
   }
 
-  private initializeRoutes = () => {
+  private initializeRoutes = function (this: AvailabilityRouter) {
     this.router.get(
       "/public/room-types/:id",
       this.validationMiddleware.validateParams(RoomTypeIdParamDTO),

@@ -139,7 +139,7 @@ export const sendVerificationEmail = async (
 ) => {
   const verifyUrl = `${APP_BASE_URL}/verify-email?token=${payload.token}`;
   if (!SMTP_HOST) {
-    console.log(
+    console.info(
       `[Email] To: ${payload.to} | Hi ${payload.name}, verify at: ${verifyUrl} (expires ${payload.expiresAt.toISOString()})`,
     );
     console.warn(
@@ -182,7 +182,7 @@ export const sendPasswordResetEmail = async (
 ) => {
   const resetUrl = `${APP_BASE_URL}/reset-password/confirm?token=${payload.token}`;
   if (!SMTP_HOST) {
-    console.log(
+    console.info(
       `[Email] To: ${payload.to} | Hi ${payload.name}, reset at: ${resetUrl} (expires ${payload.expiresAt.toISOString()})`,
     );
     console.warn(
@@ -235,7 +235,7 @@ export const sendBookingReceiptEmail = async (
     : "";
 
   if (!SMTP_HOST) {
-    console.log(
+    console.info(
       `[Email] Receipt | To: ${payload.to} | Order: ${payload.orderNo} | Total: ${totalAmountText}`,
     );
     console.warn(
@@ -331,7 +331,7 @@ export const sendCheckInReminderEmail = async (
   const portalUrl = payload.portalUrl?.trim() || "";
 
   if (!SMTP_HOST) {
-    console.log(
+    console.info(
       `[Email] Check-in reminder | To: ${payload.to} | Order: ${payload.orderNo}`,
     );
     console.warn(

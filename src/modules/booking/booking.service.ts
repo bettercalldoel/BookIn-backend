@@ -66,7 +66,51 @@ type BookingQuote = {
   nights: NightQuote[];
   baseTotal: Prisma.Decimal;
   adjustmentTotal: Prisma.Decimal;
+  pricing: BookingPricingBreakdown;
+};
+
+type BookingPricingBreakdown = {
+  currency: string;
+  roomSubtotal: Prisma.Decimal;
+  breakfastSelected: boolean;
+  breakfastPax: number;
+  breakfastUnitPrice: Prisma.Decimal;
+  breakfastNights: number;
+  breakfastTotal: Prisma.Decimal;
+  subtotalAmount: Prisma.Decimal;
+  appFeeRate: Prisma.Decimal;
+  appFeeAmount: Prisma.Decimal;
+  taxRate: Prisma.Decimal;
+  taxAmount: Prisma.Decimal;
+  tenantFeeRate: Prisma.Decimal;
+  tenantFeeAmount: Prisma.Decimal;
+  tenantPayoutAmount: Prisma.Decimal;
   totalAmount: Prisma.Decimal;
+};
+
+type ReusablePendingBooking = {
+  id: string;
+  orderNo: string;
+  paymentMethod: PaymentMethod;
+  paymentDueAt: Date;
+  proofDueAt: Date | null;
+  totalAmount: Prisma.Decimal;
+  xenditInvoiceUrl: string | null;
+  currency: string;
+  roomSubtotal: Prisma.Decimal;
+  breakfastSelected: boolean;
+  breakfastPax: number;
+  breakfastUnitPrice: Prisma.Decimal;
+  breakfastNights: number;
+  breakfastTotal: Prisma.Decimal;
+  subtotalAmount: Prisma.Decimal;
+  appFeeRate: Prisma.Decimal;
+  appFeeAmount: Prisma.Decimal;
+  taxRate: Prisma.Decimal;
+  taxAmount: Prisma.Decimal;
+  tenantFeeRate: Prisma.Decimal;
+  tenantFeeAmount: Prisma.Decimal;
+  tenantPayoutAmount: Prisma.Decimal;
 };
 
 type XenditInvoiceWebhookPayload = {
@@ -82,6 +126,10 @@ type IntegerLike = bigint | number | string | null;
 const DATE_FORMAT_ERROR = "Tanggal harus berformat YYYY-MM-DD.";
 const DEFAULT_BOOKING_PAYMENT_DUE_MINUTES = 120;
 const DEFAULT_BOOKING_PROOF_UPLOAD_DUE_MINUTES = 60;
+const PRICING_CURRENCY = "IDR";
+const APP_FEE_RATE = new Prisma.Decimal("0.02");
+const TAX_RATE = new Prisma.Decimal("0.11");
+const TENANT_FEE_RATE = new Prisma.Decimal("0.05");
 
 type TenantPaymentProofListItem = {
   id: string;
@@ -100,6 +148,16 @@ type TenantPaymentProofListItem = {
     guests: number;
     rooms: number;
     totalAmount: string;
+    subtotalAmount: string;
+    appFeeAmount: string;
+    taxAmount: string;
+    tenantFeeAmount: string;
+    tenantPayoutAmount: string;
+    breakfastSelected: boolean;
+    breakfastPax: number;
+    breakfastUnitPrice: string;
+    breakfastTotal: string;
+    currency: string;
     status: OrderStatus;
     property: {
       id: string;
@@ -127,6 +185,26 @@ export class BookingService {
     const proofDueMinutes = this.resolveBookingProofUploadDueMinutes();
 
     const result = await this.prisma.$transaction(async (tx) => {
+      await this.lockUserBookingCreation(tx, userId);
+
+      const existingPending = await this.findDuplicatePendingBooking(tx, {
+        userId,
+        dto,
+        paymentMethod,
+      });
+      if (existingPending) {
+        return {
+          reusedExisting: true as const,
+          id: existingPending.id,
+          orderNo: existingPending.orderNo,
+          totalAmount: existingPending.totalAmount.toString(),
+          pricing: this.serializePricingFromStoredBooking(existingPending),
+          paymentDueAt: existingPending.paymentDueAt,
+          paymentMethod: existingPending.paymentMethod,
+          xenditInvoiceUrl: existingPending.xenditInvoiceUrl,
+        };
+      }
+
       const quote = await this.buildQuote(tx, dto);
       const paymentDueAt = new Date(Date.now() + paymentDueMinutes * 60 * 1000);
       const proofDueAt = new Date(Date.now() + proofDueMinutes * 60 * 1000);
@@ -144,7 +222,23 @@ export class BookingService {
           rooms: quote.rooms,
           baseTotal: quote.baseTotal,
           adjustmentTotal: quote.adjustmentTotal,
-          totalAmount: quote.totalAmount,
+          roomSubtotal: quote.pricing.roomSubtotal,
+          breakfastSelected: quote.pricing.breakfastSelected,
+          breakfastPax: quote.pricing.breakfastPax,
+          breakfastUnitPrice: quote.pricing.breakfastUnitPrice,
+          breakfastNights: quote.pricing.breakfastNights,
+          breakfastTotal: quote.pricing.breakfastTotal,
+          subtotalAmount: quote.pricing.subtotalAmount,
+          appFeeRate: quote.pricing.appFeeRate,
+          appFeeAmount: quote.pricing.appFeeAmount,
+          taxRate: quote.pricing.taxRate,
+          taxAmount: quote.pricing.taxAmount,
+          tenantFeeRate: quote.pricing.tenantFeeRate,
+          tenantFeeAmount: quote.pricing.tenantFeeAmount,
+          tenantPayoutAmount: quote.pricing.tenantPayoutAmount,
+          currency: quote.pricing.currency,
+          pricingVersion: 1,
+          totalAmount: quote.pricing.totalAmount,
           paymentMethod,
           status: OrderStatus.MENUNGGU_PEMBAYARAN,
           paymentDueAt,
@@ -195,19 +289,37 @@ export class BookingService {
       );
 
       return {
+        reusedExisting: false as const,
         id: booking.id,
         orderNo: booking.orderNo,
-        totalAmount: quote.totalAmount.toString(),
+        totalAmount: quote.pricing.totalAmount.toString(),
+        pricing: this.serializePricing(quote.pricing),
         paymentDueAt: booking.paymentDueAt,
-        paymentMethod,
+        paymentMethod: booking.paymentMethod,
       };
     });
 
-    if (paymentMethod !== PaymentMethod.XENDIT) {
+    if (result.reusedExisting) {
+      return {
+        message:
+          "Booking aktif dengan detail yang sama sudah tersedia. Lanjutkan pembayaran pada order yang sama.",
+        id: result.id,
+        orderNo: result.orderNo,
+        totalAmount: result.totalAmount,
+        pricing: result.pricing,
+        paymentDueAt: result.paymentDueAt,
+        paymentMethod: result.paymentMethod,
+        xenditInvoiceUrl: result.xenditInvoiceUrl ?? null,
+        reusedExisting: true,
+      };
+    }
+
+    if (result.paymentMethod !== PaymentMethod.XENDIT) {
       return {
         message: "Booking berhasil dibuat.",
         ...result,
         xenditInvoiceUrl: null,
+        reusedExisting: false,
       };
     }
 
@@ -254,6 +366,7 @@ export class BookingService {
         ...result,
         paymentDueAt: updatedBooking.paymentDueAt,
         xenditInvoiceUrl: updatedBooking.xenditInvoiceUrl,
+        reusedExisting: false,
       };
     } catch (error) {
       await this.cancelPendingBookingBySystem(result.id);
@@ -264,6 +377,101 @@ export class BookingService {
       throw new ApiError("Gagal membuat invoice Xendit.", 502);
     }
   };
+
+  private async lockUserBookingCreation(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ) {
+    await tx.$queryRaw<{ id: string }[]>`
+      SELECT id
+      FROM accounts
+      WHERE id = ${userId}::uuid
+      FOR UPDATE
+    `;
+  }
+
+  private async findDuplicatePendingBooking(
+    tx: Prisma.TransactionClient,
+    payload: {
+      userId: string;
+      dto: CreateBookingDTO;
+      paymentMethod: PaymentMethod;
+    },
+  ): Promise<ReusablePendingBooking | null> {
+    const checkIn = this.parseDate(payload.dto.checkIn, "Check-in");
+    const checkOut = this.parseDate(payload.dto.checkOut, "Check-out");
+    const breakfastSelected = Boolean(payload.dto.breakfastSelected);
+    const breakfastPax = breakfastSelected
+      ? (payload.dto.breakfastPax ?? payload.dto.guests)
+      : 0;
+    const now = new Date();
+
+    return tx.booking.findFirst({
+      where: {
+        userId: payload.userId,
+        propertyId: payload.dto.propertyId,
+        roomTypeId: payload.dto.roomTypeId,
+        checkIn,
+        checkOut,
+        guests: payload.dto.guests,
+        rooms: payload.dto.rooms,
+        paymentMethod: payload.paymentMethod,
+        status: OrderStatus.MENUNGGU_PEMBAYARAN,
+        breakfastSelected,
+        breakfastPax,
+        paymentDueAt: { gt: now },
+        ...(payload.paymentMethod === PaymentMethod.MANUAL_TRANSFER
+          ? { proofDueAt: { gt: now } }
+          : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        orderNo: true,
+        paymentMethod: true,
+        paymentDueAt: true,
+        proofDueAt: true,
+        totalAmount: true,
+        xenditInvoiceUrl: true,
+        currency: true,
+        roomSubtotal: true,
+        breakfastSelected: true,
+        breakfastPax: true,
+        breakfastUnitPrice: true,
+        breakfastNights: true,
+        breakfastTotal: true,
+        subtotalAmount: true,
+        appFeeRate: true,
+        appFeeAmount: true,
+        taxRate: true,
+        taxAmount: true,
+        tenantFeeRate: true,
+        tenantFeeAmount: true,
+        tenantPayoutAmount: true,
+      },
+    });
+  }
+
+  private serializePricingFromStoredBooking(booking: ReusablePendingBooking) {
+    return this.serializePricing({
+      currency: booking.currency,
+      roomSubtotal: booking.roomSubtotal,
+      breakfastSelected: booking.breakfastSelected,
+      breakfastPax: booking.breakfastPax,
+      breakfastUnitPrice: booking.breakfastUnitPrice,
+      breakfastNights: booking.breakfastNights,
+      breakfastTotal: booking.breakfastTotal,
+      subtotalAmount: booking.subtotalAmount,
+      appFeeRate: booking.appFeeRate,
+      appFeeAmount: booking.appFeeAmount,
+      taxRate: booking.taxRate,
+      taxAmount: booking.taxAmount,
+      tenantFeeRate: booking.tenantFeeRate,
+      tenantFeeAmount: booking.tenantFeeAmount,
+      tenantPayoutAmount: booking.tenantPayoutAmount,
+      totalAmount: booking.totalAmount,
+    });
+  }
 
   preview = async (_userId: string, dto: CreateBookingDTO) => {
     const quote = await this.buildQuote(this.prisma, dto);
@@ -276,7 +484,8 @@ export class BookingService {
       rooms: quote.rooms,
       guests: quote.guests,
       totalNights: quote.nights.length,
-      totalAmount: quote.totalAmount.toString(),
+      totalAmount: quote.pricing.totalAmount.toString(),
+      pricing: this.serializePricing(quote.pricing),
       nights: quote.nights.map((night) => ({
         date: night.dateKey,
         basePrice: night.basePrice.toString(),
@@ -290,8 +499,8 @@ export class BookingService {
 
   list = async (userId: string, dto: ListBookingDTO) => {
     await this.autoCompleteFinishedBookings();
-    await this.autoCancelExpiredUnpaidBookings();
     await this.syncPendingXenditBookings({ userId });
+    await this.autoCancelExpiredUnpaidBookings();
 
     const parsedPage = Number(dto.page);
     const parsedLimit = Number(dto.limit);
@@ -382,7 +591,6 @@ export class BookingService {
             select: {
               name: true,
               provinceName: true,
-              province: { select: { name: true } },
             },
           },
           roomTypes: {
@@ -401,8 +609,12 @@ export class BookingService {
         name: property.name,
         address: property.address,
         city: property.city?.name ?? null,
-        province:
-          property.city?.province?.name ?? property.city?.provinceName ?? null,
+        province: property.city?.provinceName ?? null,
+        breakfast: {
+          enabled: property.breakfastEnabled,
+          pricePerPax: property.breakfastPricePerPax.toString(),
+          currency: property.breakfastCurrency,
+        },
         roomTypes: property.roomTypes.map((room) => ({
           id: room.id,
           name: room.name,
@@ -440,7 +652,6 @@ export class BookingService {
               status: PaymentProofStatus.SUBMITTED,
             },
             select: { id: true },
-            take: 1,
           },
           roomType: {
             select: {
@@ -471,7 +682,7 @@ export class BookingService {
         );
       }
 
-      if (booking.paymentProofs.length > 0) {
+      if (booking.paymentProofs) {
         throw new ApiError(
           "Booking tidak bisa dibatalkan karena bukti pembayaran sudah diunggah.",
           400,
@@ -505,7 +716,6 @@ export class BookingService {
               status: PaymentProofStatus.SUBMITTED,
             },
             select: { id: true },
-            take: 1,
           },
           roomType: {
             select: {
@@ -536,7 +746,7 @@ export class BookingService {
         );
       }
 
-      if (booking.paymentProofs.length > 0) {
+      if (booking.paymentProofs) {
         throw new ApiError(
           "Booking tidak bisa dibatalkan karena bukti pembayaran sudah diunggah.",
           400,
@@ -567,11 +777,61 @@ export class BookingService {
       where: {
         status: OrderStatus.MENUNGGU_PEMBAYARAN,
         OR: [{ proofDueAt: { lte: now } }, { paymentDueAt: { lte: now } }],
-        paymentProofs: {
-          none: {
-            status: PaymentProofStatus.SUBMITTED,
+        AND: [
+          {
+            OR: [
+              { paymentProofs: null },
+              {
+                paymentProofs: {
+                  status: {
+                    not: PaymentProofStatus.SUBMITTED,
+                  },
+                },
+              },
+            ],
           },
-        },
+          {
+            OR: [
+              { paymentMethod: PaymentMethod.XENDIT },
+              {
+                paymentProofs: {
+                  isNot: {
+                    status: PaymentProofStatus.APPROVED,
+                  },
+                },
+              },
+            ],
+          },
+          {
+            OR: [
+              { paymentMethod: PaymentMethod.MANUAL_TRANSFER },
+              {
+                paymentProofs: {
+                  isNot: {
+                    status: PaymentProofStatus.REJECTED,
+                  },
+                },
+              },
+            ],
+          },
+          {
+            OR: [
+              { paymentMethod: PaymentMethod.MANUAL_TRANSFER },
+              {
+                paymentMethod: PaymentMethod.XENDIT,
+                paymentConfirmedAt: null,
+                OR: [
+                  { xenditInvoiceStatus: null },
+                  {
+                    xenditInvoiceStatus: {
+                      notIn: ["PAID", "SETTLED"],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
       },
       select: { id: true },
     });
@@ -769,7 +1029,7 @@ export class BookingService {
       },
     });
 
-    if (status === "PAID") {
+    if (this.isXenditPaymentSettled(status)) {
       return this.confirmXenditBookingPayment(booking.id, paidAt ?? new Date());
     }
 
@@ -844,7 +1104,7 @@ export class BookingService {
           },
         });
 
-        if (invoiceStatus === "PAID") {
+        if (this.isXenditPaymentSettled(invoiceStatus)) {
           await this.confirmXenditBookingPayment(
             booking.id,
             paidAt ?? new Date(),
@@ -1080,6 +1340,16 @@ export class BookingService {
             guests: true,
             rooms: true,
             totalAmount: true,
+            subtotalAmount: true,
+            appFeeAmount: true,
+            taxAmount: true,
+            tenantFeeAmount: true,
+            tenantPayoutAmount: true,
+            breakfastSelected: true,
+            breakfastPax: true,
+            breakfastUnitPrice: true,
+            breakfastTotal: true,
+            currency: true,
             status: true,
             property: {
               select: {
@@ -1134,6 +1404,16 @@ export class BookingService {
           guests: proof.booking.guests,
           rooms: proof.booking.rooms,
           totalAmount: proof.booking.totalAmount.toString(),
+          subtotalAmount: proof.booking.subtotalAmount.toString(),
+          appFeeAmount: proof.booking.appFeeAmount.toString(),
+          taxAmount: proof.booking.taxAmount.toString(),
+          tenantFeeAmount: proof.booking.tenantFeeAmount.toString(),
+          tenantPayoutAmount: proof.booking.tenantPayoutAmount.toString(),
+          breakfastSelected: proof.booking.breakfastSelected,
+          breakfastPax: proof.booking.breakfastPax,
+          breakfastUnitPrice: proof.booking.breakfastUnitPrice.toString(),
+          breakfastTotal: proof.booking.breakfastTotal.toString(),
+          currency: proof.booking.currency,
           status: proof.booking.status,
           property: proof.booking.property,
           roomType: proof.booking.roomType,
@@ -1157,9 +1437,7 @@ export class BookingService {
           ...bookingWhere,
           paymentMethod: PaymentMethod.MANUAL_TRANSFER,
           status: OrderStatus.MENUNGGU_PEMBAYARAN,
-          paymentProofs: {
-            none: {},
-          },
+          paymentProofs: null,
           ...(submittedAtFilter ? { createdAt: submittedAtFilter } : {}),
         },
         orderBy: {
@@ -1173,6 +1451,16 @@ export class BookingService {
           guests: true,
           rooms: true,
           totalAmount: true,
+          subtotalAmount: true,
+          appFeeAmount: true,
+          taxAmount: true,
+          tenantFeeAmount: true,
+          tenantPayoutAmount: true,
+          breakfastSelected: true,
+          breakfastPax: true,
+          breakfastUnitPrice: true,
+          breakfastTotal: true,
+          currency: true,
           status: true,
           createdAt: true,
           property: {
@@ -1220,6 +1508,16 @@ export class BookingService {
             guests: booking.guests,
             rooms: booking.rooms,
             totalAmount: booking.totalAmount.toString(),
+            subtotalAmount: booking.subtotalAmount.toString(),
+            appFeeAmount: booking.appFeeAmount.toString(),
+            taxAmount: booking.taxAmount.toString(),
+            tenantFeeAmount: booking.tenantFeeAmount.toString(),
+            tenantPayoutAmount: booking.tenantPayoutAmount.toString(),
+            breakfastSelected: booking.breakfastSelected,
+            breakfastPax: booking.breakfastPax,
+            breakfastUnitPrice: booking.breakfastUnitPrice.toString(),
+            breakfastTotal: booking.breakfastTotal.toString(),
+            currency: booking.currency,
             status: booking.status,
             property: booking.property,
             roomType: booking.roomType,
@@ -1258,6 +1556,16 @@ export class BookingService {
           guests: true,
           rooms: true,
           totalAmount: true,
+          subtotalAmount: true,
+          appFeeAmount: true,
+          taxAmount: true,
+          tenantFeeAmount: true,
+          tenantPayoutAmount: true,
+          breakfastSelected: true,
+          breakfastPax: true,
+          breakfastUnitPrice: true,
+          breakfastTotal: true,
+          currency: true,
           status: true,
           createdAt: true,
           paymentConfirmedAt: true,
@@ -1310,6 +1618,16 @@ export class BookingService {
             guests: booking.guests,
             rooms: booking.rooms,
             totalAmount: booking.totalAmount.toString(),
+            subtotalAmount: booking.subtotalAmount.toString(),
+            appFeeAmount: booking.appFeeAmount.toString(),
+            taxAmount: booking.taxAmount.toString(),
+            tenantFeeAmount: booking.tenantFeeAmount.toString(),
+            tenantPayoutAmount: booking.tenantPayoutAmount.toString(),
+            breakfastSelected: booking.breakfastSelected,
+            breakfastPax: booking.breakfastPax,
+            breakfastUnitPrice: booking.breakfastUnitPrice.toString(),
+            breakfastTotal: booking.breakfastTotal.toString(),
+            currency: booking.currency,
             status: booking.status,
             property: booking.property,
             roomType: booking.roomType,
@@ -1441,6 +1759,8 @@ export class BookingService {
           b.check_in,
           b.check_out,
           b.status,
+          b.subtotal_amount,
+          b.tenant_payout_amount,
           b.total_amount,
           b.property_id,
           p.name AS property_name,
@@ -1467,7 +1787,7 @@ export class BookingService {
               b.payment_method = ${PaymentMethod.XENDIT}::payment_method
               AND (
                 b.payment_confirmed_at IS NOT NULL
-                OR UPPER(COALESCE(b.xendit_invoice_status, '')) = 'PAID'
+                OR UPPER(COALESCE(b.xendit_invoice_status, '')) IN ('PAID', 'SETTLED')
               )
             )
           )
@@ -1496,6 +1816,8 @@ export class BookingService {
           userId: string;
           user: string;
           status: OrderStatus;
+          grossTotal: DecimalLike;
+          netPayout: DecimalLike;
           total: DecimalLike;
         }>
       >(Prisma.sql`
@@ -1510,6 +1832,8 @@ export class BookingService {
           fb.user_id AS "userId",
           fb.user_name AS "user",
           fb.status,
+          fb.subtotal_amount AS "grossTotal",
+          fb.tenant_payout_amount AS "netPayout",
           fb.total_amount AS total
         FROM filtered_bookings fb
         ${orderBySql}
@@ -1536,6 +1860,8 @@ export class BookingService {
         userId: row.userId,
         user: row.user,
         status: row.status,
+        grossTotal: this.decimalLikeToNumber(row.grossTotal),
+        netPayout: this.decimalLikeToNumber(row.netPayout),
         total: this.decimalLikeToNumber(row.total),
       }));
     }
@@ -1549,6 +1875,7 @@ export class BookingService {
           transactions: IntegerLike;
           users: IntegerLike;
           totalSales: DecimalLike;
+          netPayout: DecimalLike;
           latestTransactionAt: Date | string | null;
         }>
       >(Prisma.sql`
@@ -1564,12 +1891,22 @@ export class BookingService {
               SUM(
                 CASE
                   WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
-                  THEN fb.total_amount
+                  THEN fb.subtotal_amount
                   ELSE 0
                 END
               ),
               0
             ) AS "totalSales",
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
+                  THEN fb.tenant_payout_amount
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS "netPayout",
             MAX(fb.transaction_date) AS "latestTransactionAt"
           FROM filtered_bookings fb
           GROUP BY fb.property_id, fb.property_name
@@ -1580,6 +1917,7 @@ export class BookingService {
           pr.transactions,
           pr.users,
           pr."totalSales",
+          pr."netPayout",
           pr."latestTransactionAt"
         FROM property_rows pr
         ${orderBySql}
@@ -1608,6 +1946,7 @@ export class BookingService {
         transactions: this.parseIntegerLike(row.transactions),
         users: this.parseIntegerLike(row.users),
         totalSales: this.decimalLikeToNumber(row.totalSales),
+        netPayout: this.decimalLikeToNumber(row.netPayout),
         latestTransactionAt: this.toISOStringSafe(row.latestTransactionAt),
       }));
     }
@@ -1621,6 +1960,7 @@ export class BookingService {
           transactions: IntegerLike;
           properties: IntegerLike;
           totalSales: DecimalLike;
+          netPayout: DecimalLike;
           latestTransactionAt: Date | string | null;
         }>
       >(Prisma.sql`
@@ -1636,12 +1976,22 @@ export class BookingService {
               SUM(
                 CASE
                   WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
-                  THEN fb.total_amount
+                  THEN fb.subtotal_amount
                   ELSE 0
                 END
               ),
               0
             ) AS "totalSales",
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
+                  THEN fb.tenant_payout_amount
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS "netPayout",
             MAX(fb.transaction_date) AS "latestTransactionAt"
           FROM filtered_bookings fb
           GROUP BY fb.user_id, fb.user_name
@@ -1652,6 +2002,7 @@ export class BookingService {
           ur.transactions,
           ur.properties,
           ur."totalSales",
+          ur."netPayout",
           ur."latestTransactionAt"
         FROM user_rows ur
         ${orderBySql}
@@ -1680,12 +2031,17 @@ export class BookingService {
         transactions: this.parseIntegerLike(row.transactions),
         properties: this.parseIntegerLike(row.properties),
         totalSales: this.decimalLikeToNumber(row.totalSales),
+        netPayout: this.decimalLikeToNumber(row.netPayout),
         latestTransactionAt: this.toISOStringSafe(row.latestTransactionAt),
       }));
     }
 
     const [summaryRow] = await this.prisma.$queryRaw<
-      Array<{ totalSales: DecimalLike; totalTransactions: IntegerLike }>
+      Array<{
+        totalSales: DecimalLike;
+        totalNetPayout: DecimalLike;
+        totalTransactions: IntegerLike;
+      }>
     >(Prisma.sql`
       ${ctesSql}
       SELECT
@@ -1693,12 +2049,22 @@ export class BookingService {
           SUM(
             CASE
               WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
-              THEN fb.total_amount
+              THEN fb.subtotal_amount
               ELSE 0
             END
           ),
           0
         ) AS "totalSales",
+        COALESCE(
+          SUM(
+            CASE
+              WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
+              THEN fb.tenant_payout_amount
+              ELSE 0
+            END
+          ),
+          0
+        ) AS "totalNetPayout",
         COUNT(*)::bigint AS "totalTransactions"
       FROM filtered_bookings fb
     `);
@@ -1735,7 +2101,7 @@ export class BookingService {
           SUM(
             CASE
               WHEN fb.status <> ${OrderStatus.DIBATALKAN}::order_status
-              THEN fb.total_amount
+              THEN fb.subtotal_amount
               ELSE 0
             END
           ),
@@ -1751,6 +2117,9 @@ export class BookingService {
     `);
 
     const totalSales = this.decimalLikeToNumber(summaryRow?.totalSales ?? 0);
+    const totalNetPayout = this.decimalLikeToNumber(
+      summaryRow?.totalNetPayout ?? 0,
+    );
     const totalTransactions = this.parseIntegerLike(
       summaryRow?.totalTransactions ?? 0,
     );
@@ -1764,6 +2133,7 @@ export class BookingService {
       data,
       summary: {
         totalSales,
+        totalNetPayout,
         totalTransactions,
         avgPerTransaction:
           totalTransactions > 0
@@ -1963,9 +2333,13 @@ export class BookingService {
     };
 
     try {
-      created = await this.prisma.review.create({
+      const createdReview = await this.prisma.review.create({
         data: {
           bookingId,
+          propertyId: booking.propertyId,
+          roomTypeId: booking.roomTypeId,
+          userId: booking.userId,
+          tenantId: booking.tenantId,
           rating: dto.rating,
           comment,
           createdAt: timestamp,
@@ -1979,6 +2353,13 @@ export class BookingService {
           createdAt: true,
         },
       });
+      created = {
+        id: createdReview.id,
+        bookingId: createdReview.bookingId,
+        rating: createdReview.rating ?? dto.rating,
+        comment: createdReview.comment,
+        createdAt: createdReview.createdAt,
+      };
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -2204,7 +2585,14 @@ export class BookingService {
         propertyId: true,
         totalUnits: true,
         basePrice: true,
-        property: { select: { tenantAccountId: true } },
+        property: {
+          select: {
+            tenantAccountId: true,
+            breakfastEnabled: true,
+            breakfastPricePerPax: true,
+            breakfastCurrency: true,
+          },
+        },
       },
     });
 
@@ -2252,7 +2640,7 @@ export class BookingService {
     const quoteNights: NightQuote[] = [];
     let baseTotal = new Prisma.Decimal(0);
     let adjustmentTotal = new Prisma.Decimal(0);
-    let totalAmount = new Prisma.Decimal(0);
+    let roomSubtotal = new Prisma.Decimal(0);
 
     nights.forEach((date) => {
       const dateKey = this.toDateKey(date);
@@ -2276,7 +2664,7 @@ export class BookingService {
       const roomsCount = new Prisma.Decimal(dto.rooms);
       baseTotal = baseTotal.add(basePrice.mul(roomsCount));
       adjustmentTotal = adjustmentTotal.add(adjustment.mul(roomsCount));
-      totalAmount = totalAmount.add(pricePerNight.mul(roomsCount));
+      roomSubtotal = roomSubtotal.add(pricePerNight.mul(roomsCount));
 
       quoteNights.push({
         date,
@@ -2290,6 +2678,47 @@ export class BookingService {
       });
     });
 
+    const breakfastSelected = Boolean(dto.breakfastSelected);
+    let breakfastPax = 0;
+    let breakfastUnitPrice = new Prisma.Decimal(0);
+
+    if (breakfastSelected) {
+      if (!roomType.property.breakfastEnabled) {
+        throw new ApiError("Sarapan tidak tersedia untuk properti ini.", 400);
+      }
+
+      const requestedPax = dto.breakfastPax ?? dto.guests;
+      if (!Number.isInteger(requestedPax) || requestedPax < 1) {
+        throw new ApiError("Jumlah pax sarapan tidak valid.", 400);
+      }
+
+      if (requestedPax > dto.guests) {
+        throw new ApiError("Jumlah pax sarapan melebihi jumlah tamu.", 400);
+      }
+
+      breakfastPax = requestedPax;
+      breakfastUnitPrice = new Prisma.Decimal(
+        roomType.property.breakfastPricePerPax,
+      );
+    }
+
+    const breakfastNights = breakfastSelected ? nights.length : 0;
+    const breakfastTotal = breakfastSelected
+      ? breakfastUnitPrice
+          .mul(new Prisma.Decimal(breakfastPax))
+          .mul(new Prisma.Decimal(breakfastNights))
+      : new Prisma.Decimal(0);
+    const subtotalAmount = roomSubtotal.add(breakfastTotal);
+    const appFeeAmount = this.roundCurrencyAmount(
+      subtotalAmount.mul(APP_FEE_RATE),
+    );
+    const taxAmount = this.roundCurrencyAmount(subtotalAmount.mul(TAX_RATE));
+    const tenantFeeAmount = this.roundCurrencyAmount(
+      subtotalAmount.mul(TENANT_FEE_RATE),
+    );
+    const tenantPayoutAmount = subtotalAmount.sub(tenantFeeAmount);
+    const totalAmount = subtotalAmount.add(appFeeAmount).add(taxAmount);
+
     return {
       roomTypeId: roomType.id,
       propertyId: roomType.propertyId,
@@ -2301,7 +2730,24 @@ export class BookingService {
       nights: quoteNights,
       baseTotal,
       adjustmentTotal,
-      totalAmount,
+      pricing: {
+        currency: roomType.property.breakfastCurrency || PRICING_CURRENCY,
+        roomSubtotal,
+        breakfastSelected,
+        breakfastPax,
+        breakfastUnitPrice,
+        breakfastNights,
+        breakfastTotal,
+        subtotalAmount,
+        appFeeRate: APP_FEE_RATE,
+        appFeeAmount,
+        taxRate: TAX_RATE,
+        taxAmount,
+        tenantFeeRate: TENANT_FEE_RATE,
+        tenantFeeAmount,
+        tenantPayoutAmount,
+        totalAmount,
+      },
     } satisfies BookingQuote;
   }
 
@@ -2318,7 +2764,6 @@ export class BookingService {
             status: PaymentProofStatus.SUBMITTED,
           },
           select: { id: true },
-          take: 1,
         },
         roomType: {
           select: {
@@ -2337,7 +2782,7 @@ export class BookingService {
 
     if (!booking) return false;
     if (booking.status !== OrderStatus.MENUNGGU_PEMBAYARAN) return false;
-    if (booking.paymentProofs.length > 0) return false;
+    if (booking.paymentProofs) return false;
 
     const cancelledResult = await tx.booking.updateMany({
       where: {
@@ -2473,23 +2918,23 @@ export class BookingService {
     if (sortBy === "total") {
       if (sortOrder === "asc") {
         return Prisma.sql`
-          ORDER BY fb.total_amount ASC, fb.transaction_date ASC, fb.id ASC
+          ORDER BY fb.subtotal_amount ASC, fb.transaction_date ASC, fb.id ASC
         `;
       }
 
       return Prisma.sql`
-        ORDER BY fb.total_amount DESC, fb.transaction_date DESC, fb.id DESC
+        ORDER BY fb.subtotal_amount DESC, fb.transaction_date DESC, fb.id DESC
       `;
     }
 
     if (sortOrder === "asc") {
       return Prisma.sql`
-        ORDER BY fb.transaction_date ASC, fb.total_amount ASC, fb.id ASC
+        ORDER BY fb.transaction_date ASC, fb.subtotal_amount ASC, fb.id ASC
       `;
     }
 
     return Prisma.sql`
-      ORDER BY fb.transaction_date DESC, fb.total_amount DESC, fb.id DESC
+      ORDER BY fb.transaction_date DESC, fb.subtotal_amount DESC, fb.id DESC
     `;
   }
 
@@ -2741,6 +3186,10 @@ export class BookingService {
     return parsed;
   }
 
+  private isXenditPaymentSettled(status: string | null | undefined) {
+    return status === "PAID" || status === "SETTLED";
+  }
+
   private normalizeCallbackToken(value: string | undefined) {
     if (!value) return "";
     const trimmed = value.trim();
@@ -2859,6 +3308,33 @@ export class BookingService {
   private normalizeReviewNotes(notes?: string) {
     const clean = notes?.trim();
     return clean ? clean : null;
+  }
+
+  private roundCurrencyAmount(value: Prisma.Decimal) {
+    return value.toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP);
+  }
+
+  private serializePricing(pricing: BookingPricingBreakdown) {
+    return {
+      currency: pricing.currency,
+      roomSubtotal: pricing.roomSubtotal.toString(),
+      breakfast: {
+        selected: pricing.breakfastSelected,
+        pax: pricing.breakfastPax,
+        unitPrice: pricing.breakfastUnitPrice.toString(),
+        nights: pricing.breakfastNights,
+        total: pricing.breakfastTotal.toString(),
+      },
+      subtotal: pricing.subtotalAmount.toString(),
+      appFeeRate: pricing.appFeeRate.toString(),
+      appFeeAmount: pricing.appFeeAmount.toString(),
+      taxRate: pricing.taxRate.toString(),
+      taxAmount: pricing.taxAmount.toString(),
+      tenantFeeRate: pricing.tenantFeeRate.toString(),
+      tenantFeeAmount: pricing.tenantFeeAmount.toString(),
+      tenantPayoutAmount: pricing.tenantPayoutAmount.toString(),
+      totalAmount: pricing.totalAmount.toString(),
+    };
   }
 
   private getJakartaDateKey(offsetDays: number) {

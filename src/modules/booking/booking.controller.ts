@@ -17,13 +17,23 @@ const resolveUserId = (req: Request) => {
   return user?.sub ?? user?.id ?? "";
 };
 
+const requireUserId = (req: Request) => {
+  const userId = resolveUserId(req);
+  if (!userId) throw new ApiError("Unauthorized.", 401);
+  return userId;
+};
+
+const requireParamId = (req: Request, key: string, label: string) => {
+  const value = String(req.params[key] ?? "");
+  if (!value) throw new ApiError(`${label} required.`, 400);
+  return value;
+};
+
 export class BookingController {
   constructor(private bookingService: BookingService) {}
 
   create = async (req: Request, res: Response) => {
-    const userId = resolveUserId(req);
-    if (!userId) throw new ApiError("Unauthorized.", 401);
-
+    const userId = requireUserId(req);
     const result = await this.bookingService.create(
       userId,
       req.body as CreateBookingDTO,
@@ -32,9 +42,7 @@ export class BookingController {
   };
 
   preview = async (req: Request, res: Response) => {
-    const userId = resolveUserId(req);
-    if (!userId) throw new ApiError("Unauthorized.", 401);
-
+    const userId = requireUserId(req);
     const result = await this.bookingService.preview(
       userId,
       req.body as CreateBookingDTO,
@@ -56,9 +64,7 @@ export class BookingController {
   };
 
   list = async (req: Request, res: Response) => {
-    const userId = resolveUserId(req);
-    if (!userId) throw new ApiError("Unauthorized.", 401);
-
+    const userId = requireUserId(req);
     const result = await this.bookingService.list(
       userId,
       req.query as unknown as ListBookingDTO,
@@ -74,12 +80,8 @@ export class BookingController {
   };
 
   cancel = async (req: Request, res: Response) => {
-    const userId = resolveUserId(req);
-    if (!userId) throw new ApiError("Unauthorized.", 401);
-
-    const bookingId = String(req.params.id ?? "");
-    if (!bookingId) throw new ApiError("Booking ID required.", 400);
-
+    const userId = requireUserId(req);
+    const bookingId = requireParamId(req, "id", "Booking ID");
     const { cancelledBy } = req.body as CancelBookingDTO;
     const result = await this.bookingService.cancelByUser(
       userId,
@@ -90,12 +92,8 @@ export class BookingController {
   };
 
   cancelByTenant = async (req: Request, res: Response) => {
-    const tenantAccountId = resolveUserId(req);
-    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
-
-    const bookingId = String(req.params.id ?? "");
-    if (!bookingId) throw new ApiError("Booking ID required.", 400);
-
+    const tenantAccountId = requireUserId(req);
+    const bookingId = requireParamId(req, "id", "Booking ID");
     const result = await this.bookingService.cancelByTenant(
       tenantAccountId,
       bookingId,
@@ -104,12 +102,8 @@ export class BookingController {
   };
 
   createReview = async (req: Request, res: Response) => {
-    const userId = resolveUserId(req);
-    if (!userId) throw new ApiError("Unauthorized.", 401);
-
-    const bookingId = String(req.params.id ?? "");
-    if (!bookingId) throw new ApiError("Booking ID required.", 400);
-
+    const userId = requireUserId(req);
+    const bookingId = requireParamId(req, "id", "Booking ID");
     const result = await this.bookingService.createReview(
       userId,
       bookingId,
@@ -120,11 +114,8 @@ export class BookingController {
   };
 
   uploadPaymentProof = async (req: Request, res: Response) => {
-    const userId = resolveUserId(req);
-    if (!userId) throw new ApiError("Unauthorized.", 401);
-
-    const bookingId = String(req.params.id ?? "");
-    if (!bookingId) throw new ApiError("Booking ID required.", 400);
+    const userId = requireUserId(req);
+    const bookingId = requireParamId(req, "id", "Booking ID");
 
     if (!req.file) {
       throw new ApiError("Payment proof file is required.", 400);
@@ -139,9 +130,7 @@ export class BookingController {
   };
 
   listTenantPaymentProofs = async (req: Request, res: Response) => {
-    const tenantAccountId = resolveUserId(req);
-    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
-
+    const tenantAccountId = requireUserId(req);
     const result = await this.bookingService.listTenantPaymentProofs(
       tenantAccountId,
       req.query as unknown as ListTenantPaymentProofDTO,
@@ -151,9 +140,7 @@ export class BookingController {
   };
 
   listTenantSalesReport = async (req: Request, res: Response) => {
-    const tenantAccountId = resolveUserId(req);
-    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
-
+    const tenantAccountId = requireUserId(req);
     const result = await this.bookingService.listTenantSalesReport(
       tenantAccountId,
       req.query as unknown as ListTenantSalesReportDTO,
@@ -163,9 +150,7 @@ export class BookingController {
   };
 
   listTenantReviews = async (req: Request, res: Response) => {
-    const tenantAccountId = resolveUserId(req);
-    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
-
+    const tenantAccountId = requireUserId(req);
     const result = await this.bookingService.listTenantReviews(
       tenantAccountId,
       req.query as unknown as ListTenantReviewDTO,
@@ -175,12 +160,8 @@ export class BookingController {
   };
 
   replyReview = async (req: Request, res: Response) => {
-    const tenantAccountId = resolveUserId(req);
-    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
-
-    const reviewId = String(req.params.id ?? "");
-    if (!reviewId) throw new ApiError("Review ID required.", 400);
-
+    const tenantAccountId = requireUserId(req);
+    const reviewId = requireParamId(req, "id", "Review ID");
     const result = await this.bookingService.replyReview(
       tenantAccountId,
       reviewId,
@@ -191,12 +172,8 @@ export class BookingController {
   };
 
   approvePaymentProof = async (req: Request, res: Response) => {
-    const tenantAccountId = resolveUserId(req);
-    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
-
-    const paymentProofId = String(req.params.id ?? "");
-    if (!paymentProofId) throw new ApiError("Payment proof ID required.", 400);
-
+    const tenantAccountId = requireUserId(req);
+    const paymentProofId = requireParamId(req, "id", "Payment proof ID");
     const result = await this.bookingService.approvePaymentProof(
       tenantAccountId,
       paymentProofId,
@@ -206,12 +183,8 @@ export class BookingController {
   };
 
   rejectPaymentProof = async (req: Request, res: Response) => {
-    const tenantAccountId = resolveUserId(req);
-    if (!tenantAccountId) throw new ApiError("Unauthorized.", 401);
-
-    const paymentProofId = String(req.params.id ?? "");
-    if (!paymentProofId) throw new ApiError("Payment proof ID required.", 400);
-
+    const tenantAccountId = requireUserId(req);
+    const paymentProofId = requireParamId(req, "id", "Payment proof ID");
     const result = await this.bookingService.rejectPaymentProof(
       tenantAccountId,
       paymentProofId,
