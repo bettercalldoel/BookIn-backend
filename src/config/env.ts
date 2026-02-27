@@ -1,6 +1,25 @@
 import "dotenv/config";
 
-export const PORT = process.env.PORT;
+const parsePort = (value: string | undefined) => {
+  const parsed = Number(value ?? "8000");
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`PORT must be a positive integer. Received: ${value}`);
+  }
+  return parsed;
+};
+
+const parseCorsOrigins = (value: string | undefined) => {
+  const parsed = (value ?? "*")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return parsed.length > 0 ? parsed : ["*"];
+};
+
+export const PORT = parsePort(process.env.PORT);
+export const CORS_ALLOWED_ORIGINS = parseCorsOrigins(
+  process.env.CORS_ALLOWED_ORIGINS,
+);
 export const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret";
 export const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN ?? "1h";
 export const APP_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";

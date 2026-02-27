@@ -137,6 +137,70 @@ npm run build
 npm run start
 ```
 
+## Deploy to Koyeb + Supabase
+
+This setup is the simplest path for this codebase in production:
+
+- Backend runtime: Koyeb Web Service
+- Database: Supabase Postgres
+- Frontend: Vercel
+
+### 1. Create Supabase Postgres
+
+Create a new Supabase project, then copy the Postgres connection string from the
+Supabase dashboard. Make sure it includes `sslmode=require`.
+
+Use the same value for:
+
+- `DATABASE_URL`
+- `DIRECT_URL`
+
+Example format:
+
+```env
+DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+DIRECT_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+```
+
+### 2. Create Koyeb Web Service
+
+Use this repository on Koyeb and configure:
+
+- Build command: `npm ci && npm run build`
+- Run command: `npm run db:deploy && npm run start`
+- Port: `PORT` (set to `8000`)
+- Health check path: `/healthz`
+
+Required environment variables:
+
+- `NODE_ENV=production`
+- `PORT=8000`
+- `CORS_ALLOWED_ORIGINS=https://your-frontend.vercel.app,*.vercel.app`
+- `APP_BASE_URL=https://your-frontend.vercel.app`
+- `JWT_SECRET=<strong-random-secret>`
+- `JWT_EXPIRES_IN=1h`
+- `EMAIL_VERIFICATION_TTL_MINUTES=60`
+- `PASSWORD_RESET_TTL_MINUTES=60`
+- `DATABASE_URL=<supabase-connection-string>`
+- `DIRECT_URL=<supabase-connection-string>`
+
+Optional service integrations (set only if used):
+
+- `GOOGLE_CLIENT_ID`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_SECURE`
+- `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `CLOUDINARY_UPLOAD_FOLDER`
+- `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `XENDIT_API_BASE_URL`, `XENDIT_INVOICE_EXPIRY_MINUTES`
+- `BOOKING_PAYMENT_DUE_MINUTES`, `BOOKING_PROOF_UPLOAD_DUE_MINUTES`
+
+### 3. Point Vercel Frontend to Koyeb API
+
+In Vercel project environment variables:
+
+- `NEXT_PUBLIC_API_BASE_URL=https://<your-koyeb-service-domain>`
+- `NEXT_PUBLIC_GOOGLE_CLIENT_ID=<your-google-client-id>` (optional)
+
+Then redeploy frontend so the public env vars are baked into the build.
+
 ## Docker Support
 
 This project includes Docker configurations for both development and production environments.

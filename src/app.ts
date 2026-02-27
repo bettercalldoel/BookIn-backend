@@ -1,7 +1,7 @@
 import cors from "cors";
 import express, { Express } from "express";
 import "reflect-metadata";
-import { PORT } from "./config/env.js";
+import { CORS_ALLOWED_ORIGINS, PORT } from "./config/env.js";
 import { loggerHttp } from "./lib/logger-http.js";
 import { prisma } from "./lib/prisma.js";
 import { errorMiddleware } from "./middlewares/error.middleware.js";
@@ -43,13 +43,62 @@ export class App {
   }
 
   private configure() {
+    const allowAllOrigins = CORS_ALLOWED_ORIGINS.includes("*");
+
     this.app.use(
       cors({
+        origin: (origin, callback) => {
+          if (!origin || allowAllOrigins) {
+            callback(null, true);
+            return;
+          }
+
+          if (this.isAllowedCorsOrigin(origin)) {
+            callback(null, true);
+            return;
+          }
+
+          callback(new Error(`Origin "${origin}" is not allowed by CORS.`));
+        },
         exposedHeaders: ["Authorization"],
       }),
     );
     this.app.use(loggerHttp);
     this.app.use(express.json());
+    this.app.get("/healthz", (_req, res) => {
+      res.status(200).json({ status: "ok" });
+    });
+  }
+
+  private isAllowedCorsOrigin(origin: string) {
+    const parsedOrigin = this.parseOrigin(origin);
+    if (!parsedOrigin) return false;
+
+    const requestHost = parsedOrigin.hostname.toLowerCase();
+    const requestOrigin = parsedOrigin.origin.toLowerCase();
+
+    return CORS_ALLOWED_ORIGINS.some((allowedOrigin) => {
+      const normalized = allowedOrigin.toLowerCase();
+
+      if (normalized.startsWith("*.")) {
+        const suffix = normalized.slice(1); // ".vercel.app"
+        return requestHost.endsWith(suffix);
+      }
+
+      if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+        return requestOrigin === normalized.replace(/\/$/, "");
+      }
+
+      return requestHost === normalized;
+    });
+  }
+
+  private parseOrigin(value: string) {
+    try {
+      return new URL(value);
+    } catch {
+      return null;
+    }
   }
 
   private registerModules() {

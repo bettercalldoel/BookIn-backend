@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+dist
+docker/dev/postgres
+docker/prod/postgres
+.env
+.env.*
+npm-debug.log*
+*.log
+.DS_Store
