@@ -1,7 +1,9 @@
 import nodemailer from "nodemailer";
+import BrevoTransport from "nodemailer-brevo-transport";
 import { PaymentMethod } from "@prisma/client";
 import {
   APP_BASE_URL,
+  BREVO_API_KEY,
   SMTP_FROM,
   SMTP_HOST,
   SMTP_PASS,
@@ -11,25 +13,42 @@ import {
 } from "../config/env.js";
 const DATE_TIMEZONE = "Asia/Jakarta";
 const MS_PER_DAY = 24 * 60 * 60 * 1e3;
+const EMAIL_TRANSPORT_MODE = BREVO_API_KEY
+  ? "brevo-api"
+  : SMTP_HOST
+    ? "smtp"
+    : "disabled";
 const resolveFromAddress = () =>
   SMTP_FROM || SMTP_USER || "no-reply@bookin.local";
 const logEmailSent = (label, to, metadata = "") => {
   const suffix = metadata ? ` | ${metadata}` : "";
-  console.info(`[Email] Sent ${label} | To: ${to}${suffix}`);
+  console.info(
+    `[Email] Sent ${label} | To: ${to} | transport=${EMAIL_TRANSPORT_MODE}${suffix}`,
+  );
 };
+const isEmailTransportConfigured = () => EMAIL_TRANSPORT_MODE !== "disabled";
 const createTransporter = () =>
-  nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_SECURE || SMTP_PORT === 465,
-    auth:
-      SMTP_USER && SMTP_PASS
-        ? {
-            user: SMTP_USER,
-            pass: SMTP_PASS,
-          }
-        : void 0,
-  });
+  BREVO_API_KEY
+    ? nodemailer.createTransport(
+        new BrevoTransport({
+          apiKey: BREVO_API_KEY,
+        }),
+      )
+    : nodemailer.createTransport({
+        host: SMTP_HOST,
+        port: SMTP_PORT,
+        secure: SMTP_SECURE || SMTP_PORT === 465,
+        auth:
+          SMTP_USER && SMTP_PASS
+            ? {
+                user: SMTP_USER,
+                pass: SMTP_PASS,
+              }
+            : void 0,
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 10_000,
+      });
 const escapeHtml = (value) =>
   value
     .replace(/&/g, "&amp;")
@@ -85,12 +104,12 @@ const countNights = (checkIn, checkOut) => {
 const sendVerificationEmail = async (payload) => {
   const verifyUrl = `${APP_BASE_URL}/verify-email?token=${payload.token}`;
   const expiresAtText = formatDateTime(payload.expiresAt);
-  if (!SMTP_HOST) {
+  if (!isEmailTransportConfigured()) {
     console.info(
       `[Email] To: ${payload.to} | Hi ${payload.name}, verify at: ${verifyUrl} (expires ${payload.expiresAt.toISOString()})`,
     );
     console.warn(
-      "[Email] SMTP_HOST belum di-set. Email verifikasi belum dikirim.",
+      "[Email] Transport email belum dikonfigurasi. Email verifikasi belum dikirim.",
     );
     return;
   }
@@ -166,12 +185,12 @@ const sendVerificationEmail = async (payload) => {
 const sendPasswordResetEmail = async (payload) => {
   const resetUrl = `${APP_BASE_URL}/reset-password/confirm?token=${payload.token}`;
   const expiresAtText = formatDateTime(payload.expiresAt);
-  if (!SMTP_HOST) {
+  if (!isEmailTransportConfigured()) {
     console.info(
       `[Email] To: ${payload.to} | Hi ${payload.name}, reset at: ${resetUrl} (expires ${payload.expiresAt.toISOString()})`,
     );
     console.warn(
-      "[Email] SMTP_HOST belum di-set. Email reset password belum dikirim.",
+      "[Email] Transport email belum dikonfigurasi. Email reset password belum dikirim.",
     );
     return;
   }
@@ -255,12 +274,12 @@ const sendBookingReceiptEmail = async (payload) => {
   const portalUrl = APP_BASE_URL
     ? `${APP_BASE_URL.replace(/\/$/, "")}/my-transaction`
     : "";
-  if (!SMTP_HOST) {
+  if (!isEmailTransportConfigured()) {
     console.info(
       `[Email] Receipt | To: ${payload.to} | Order: ${payload.orderNo} | Total: ${totalAmountText}`,
     );
     console.warn(
-      "[Email] SMTP_HOST belum di-set. Email kwitansi transaksi belum dikirim.",
+      "[Email] Transport email belum dikonfigurasi. Email kwitansi transaksi belum dikirim.",
     );
     return;
   }
@@ -417,12 +436,12 @@ const sendPaymentProofRejectedEmail = async (payload) => {
   const portalUrl = APP_BASE_URL
     ? `${APP_BASE_URL.replace(/\/$/, "")}/my-transaction?orderNo=${encodeURIComponent(payload.orderNo)}`
     : "";
-  if (!SMTP_HOST) {
+  if (!isEmailTransportConfigured()) {
     console.info(
       `[Email] Payment proof rejected | To: ${payload.to} | Order: ${payload.orderNo}`,
     );
     console.warn(
-      "[Email] SMTP_HOST belum di-set. Email penolakan bukti pembayaran belum dikirim.",
+      "[Email] Transport email belum dikonfigurasi. Email penolakan bukti pembayaran belum dikirim.",
     );
     return;
   }
@@ -529,12 +548,12 @@ const sendCheckInReminderEmail = async (payload) => {
   const nights = countNights(payload.checkIn, payload.checkOut);
   const tenantText = payload.tenantName?.trim() || "Tim Tenant";
   const portalUrl = payload.portalUrl?.trim() || "";
-  if (!SMTP_HOST) {
+  if (!isEmailTransportConfigured()) {
     console.info(
       `[Email] Check-in reminder | To: ${payload.to} | Order: ${payload.orderNo}`,
     );
     console.warn(
-      "[Email] SMTP_HOST belum di-set. Email reminder check-in belum dikirim.",
+      "[Email] Transport email belum dikonfigurasi. Email reminder check-in belum dikirim.",
     );
     return;
   }
@@ -645,12 +664,12 @@ const sendBookingCancelledByTenantEmail = async (payload) => {
   const portalUrl = APP_BASE_URL
     ? `${APP_BASE_URL.replace(/\/$/, "")}/my-transaction`
     : "";
-  if (!SMTP_HOST) {
+  if (!isEmailTransportConfigured()) {
     console.info(
       `[Email] Booking cancelled by tenant | To: ${payload.to} | Order: ${payload.orderNo}`,
     );
     console.warn(
-      "[Email] SMTP_HOST belum di-set. Email notifikasi pembatalan booking belum dikirim.",
+      "[Email] Transport email belum dikonfigurasi. Email notifikasi pembatalan booking belum dikirim.",
     );
     return;
   }

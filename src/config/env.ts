@@ -30,6 +30,7 @@ export const PASSWORD_RESET_TTL_MINUTES = Number(
   process.env.PASSWORD_RESET_TTL_MINUTES ?? "60",
 );
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
+export const BREVO_API_KEY = process.env.BREVO_API_KEY ?? "";
 export const SMTP_HOST = process.env.SMTP_HOST ?? "";
 export const SMTP_PORT = Number(process.env.SMTP_PORT ?? "587");
 export const SMTP_USER = process.env.SMTP_USER ?? "";
