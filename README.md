@@ -192,6 +192,23 @@ Optional service integrations (set only if used):
 - `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `XENDIT_API_BASE_URL`, `XENDIT_INVOICE_EXPIRY_MINUTES`
 - `BOOKING_PAYMENT_DUE_MINUTES`, `BOOKING_PROOF_UPLOAD_DUE_MINUTES`
 
+CLI deployment helper is available in:
+
+```bash
+./scripts/deploy-koyeb.sh
+```
+
+Required shell variables for the helper:
+
+```bash
+export KOYEB_TOKEN=your_koyeb_pat
+export DATABASE_URL='postgresql://...'
+export DIRECT_URL='postgresql://...'
+export APP_BASE_URL='https://your-frontend.vercel.app'
+export JWT_SECRET='your-strong-secret'
+./scripts/deploy-koyeb.sh
+```
+
 ### 3. Point Vercel Frontend to Koyeb API
 
 In Vercel project environment variables:
