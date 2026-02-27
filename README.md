@@ -122,7 +122,7 @@ npm run dev
 
 The server will start on `http://localhost:8000` (or the port specified in your `.env` file).
 
-If your `.env` points to a remote database (for example Supabase), use this command to force local Docker Postgres:
+If your `.env` points to a remote database (for example Railway Postgres), use this command to force local Docker Postgres:
 
 ```bash
 npm run dev:local-db
@@ -137,41 +137,25 @@ npm run build
 npm run start
 ```
 
-## Deploy to Koyeb + Supabase
+## Deploy to Railway
 
-This setup is the simplest path for this codebase in production:
+This setup keeps deployment simple for this codebase:
 
-- Backend runtime: Koyeb Web Service
-- Database: Supabase Postgres
+- Backend runtime: Railway
+- Database: Railway Postgres (or external Postgres with SSL)
 - Frontend: Vercel
 
-### 1. Create Supabase Postgres
+### 1. Create Railway Project and Service
 
-Create a new Supabase project, then copy the Postgres connection string from the
-Supabase dashboard. Make sure it includes `sslmode=require`.
+In Railway dashboard:
 
-Use the same value for:
+1. Create a project.
+2. Add a Postgres service.
+3. Add a backend service connected to this repo (`BookIn-backend`).
 
-- `DATABASE_URL`
-- `DIRECT_URL`
+### 2. Set Backend Variables in Railway
 
-Example format:
-
-```env
-DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
-DIRECT_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
-```
-
-### 2. Create Koyeb Web Service
-
-Use this repository on Koyeb and configure:
-
-- Build command: `npm ci && npm run build`
-- Run command: `npm run db:deploy && npm run start`
-- Port: `PORT` (set to `8000`)
-- Health check path: `/healthz`
-
-Required environment variables:
+Set these variables on the backend service:
 
 - `NODE_ENV=production`
 - `PORT=8000`
@@ -181,8 +165,8 @@ Required environment variables:
 - `JWT_EXPIRES_IN=1h`
 - `EMAIL_VERIFICATION_TTL_MINUTES=60`
 - `PASSWORD_RESET_TTL_MINUTES=60`
-- `DATABASE_URL=<supabase-connection-string>`
-- `DIRECT_URL=<supabase-connection-string>`
+- `DATABASE_URL=<postgres-connection-string-with-sslmode=require>`
+- `DIRECT_URL=<postgres-connection-string-with-sslmode=require>`
 
 Optional service integrations (set only if used):
 
@@ -192,28 +176,45 @@ Optional service integrations (set only if used):
 - `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `XENDIT_API_BASE_URL`, `XENDIT_INVOICE_EXPIRY_MINUTES`
 - `BOOKING_PAYMENT_DUE_MINUTES`, `BOOKING_PROOF_UPLOAD_DUE_MINUTES`
 
-CLI deployment helper is available in:
+### 3. Deploy Backend via Railway CLI (Optional but Fast)
+
+Install CLI:
 
 ```bash
-./scripts/deploy-koyeb.sh
+npm i -g @railway/cli
 ```
 
-Required shell variables for the helper:
+Authenticate once:
 
 ```bash
-export KOYEB_TOKEN=your_koyeb_pat
+railway login
+```
+
+Run deployment helper:
+
+```bash
+export RAILWAY_PROJECT_ID=<project-id> # optional if folder already linked
+export RAILWAY_SERVICE_NAME=api
+export RAILWAY_ENVIRONMENT=production
 export DATABASE_URL='postgresql://...'
 export DIRECT_URL='postgresql://...'
 export APP_BASE_URL='https://your-frontend.vercel.app'
 export JWT_SECRET='your-strong-secret'
-./scripts/deploy-koyeb.sh
+./scripts/deploy-railway.sh
 ```
 
-### 3. Point Vercel Frontend to Koyeb API
+The helper will:
+
+- link/create project and service
+- set required environment variables
+- trigger `railway up`
+- print deployment status and domain information
+
+### 4. Point Vercel Frontend to Railway API
 
 In Vercel project environment variables:
 
-- `NEXT_PUBLIC_API_BASE_URL=https://<your-koyeb-service-domain>`
+- `NEXT_PUBLIC_API_BASE_URL=https://<your-railway-backend-domain>`
 - `NEXT_PUBLIC_GOOGLE_CLIENT_ID=<your-google-client-id>` (optional)
 
 Then redeploy frontend so the public env vars are baked into the build.
