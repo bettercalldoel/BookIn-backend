@@ -10,7 +10,7 @@ export class MediaController {
   };
 
   getProfileSignature = (_req: Request, res: Response) => {
-    const result = this.mediaService.getUploadSignature();
+    const result = this.mediaService.getProfileUploadSignature();
     res.json(result);
   };
 }

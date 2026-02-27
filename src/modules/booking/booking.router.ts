@@ -16,6 +16,7 @@ import { ReviewIdParamDTO } from "./dto/review-id.dto.js";
 import { ListBookingOptionDTO } from "./dto/list-booking-option.dto.js";
 import { ListTenantSalesReportDTO } from "./dto/list-tenant-sales-report.dto.js";
 import { uploadImage } from "../../lib/multer.js";
+import { requireUserApproval } from "../../middlewares/user-approval.middleware.js";
 
 export class BookingRouter {
   private router: Router;
@@ -114,6 +115,7 @@ export class BookingRouter {
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.TENANT),
       this.validationMiddleware.validateParams(BookingIdParamDTO),
+      requireUserApproval,
       this.bookingController.cancelByTenant,
     );
 
@@ -123,6 +125,7 @@ export class BookingRouter {
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.TENANT),
       this.validationMiddleware.validateParams(PaymentProofIdParamDTO),
+      requireUserApproval,
       this.bookingController.approvePaymentProof,
     );
 
@@ -132,6 +135,7 @@ export class BookingRouter {
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.TENANT),
       this.validationMiddleware.validateParams(PaymentProofIdParamDTO),
+      requireUserApproval,
       this.bookingController.rejectPaymentProof,
     );
 
@@ -152,6 +156,7 @@ export class BookingRouter {
       this.authMiddleware.requireAccountType(AccountType.USER),
       this.validationMiddleware.validateParams(BookingIdParamDTO),
       this.validationMiddleware.validateBody(CancelBookingDTO),
+      requireUserApproval,
       this.bookingController.cancel,
     );
 

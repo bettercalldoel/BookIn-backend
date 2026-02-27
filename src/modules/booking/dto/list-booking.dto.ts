@@ -1,13 +1,15 @@
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
   MaxLength,
   Min,
 } from "class-validator";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import { OrderStatus } from "@prisma/client";
 
 export class ListBookingDTO {
@@ -39,4 +41,24 @@ export class ListBookingDTO {
   @IsInt()
   @Min(1)
   limit: number = 10;
+
+  @IsOptional()
+  @IsIn(["createdAt", "checkIn", "totalAmount", "orderNo"])
+  sortBy?: "createdAt" | "checkIn" | "totalAmount" | "orderNo";
+
+  @IsOptional()
+  @IsIn(["asc", "desc"])
+  sortOrder?: "asc" | "desc";
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+    }
+    return value;
+  })
+  @IsBoolean()
+  reviewed?: boolean;
 }

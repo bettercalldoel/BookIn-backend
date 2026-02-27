@@ -10,6 +10,7 @@ import { CreateRateRuleDTO } from "./dto/create-rate-rule.dto.js";
 import { UpdateRateRuleDTO } from "./dto/update-rate-rule.dto.js";
 import { RateRuleIdParamDTO } from "./dto/rate-rule-id.dto.js";
 import { ListRateRuleQueryDTO } from "./dto/list-rate-rule-query.dto.js";
+import { requireUserApproval } from "../../middlewares/user-approval.middleware.js";
 
 export class AvailabilityRouter {
   private router: Router;
@@ -85,6 +86,7 @@ export class AvailabilityRouter {
       this.authMiddleware.requireVerifiedAccount,
       this.authMiddleware.requireAccountType(AccountType.TENANT),
       this.validationMiddleware.validateParams(RateRuleIdParamDTO),
+      requireUserApproval,
       this.availabilityController.deleteRateRule,
     );
   };

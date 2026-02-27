@@ -9,12 +9,29 @@ import { SearchPropertyQueryDTO } from "./dto/search-property.dto.js";
 import { ListPropertyQueryDTO } from "./dto/list-property-query.dto.js";
 import { UpdatePropertyBreakfastDTO } from "./dto/update-breakfast.dto.js";
 import { ListPublicCityQueryDTO } from "./dto/list-public-city-query.dto.js";
+import { ListPublicCategoryQueryDTO } from "./dto/list-public-category-query.dto.js";
 
 export class PropertyController {
   constructor(private propertyService: PropertyService) {}
 
-  listPublicCategories = async (_req: Request, res: Response) => {
-    const result = await this.propertyService.listPublicCategories();
+  listPublicCategories = async (req: Request, res: Response) => {
+    const query = req.query as unknown as ListPublicCategoryQueryDTO;
+    const search = String(query.search ?? "").trim();
+    const limitRaw = Number(query.limit ?? 100);
+    const pageRaw = Number(query.page ?? 1);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
+    const page =
+      Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
+    const sortBy = query.sortBy === "name" ? "name" : "name";
+    const sortOrder = query.sortOrder === "desc" ? "desc" : "asc";
+
+    const result = await this.propertyService.listPublicCategories(search, {
+      page,
+      limit,
+      sortBy,
+      sortOrder,
+    });
     res.status(200).json(result);
   };
 

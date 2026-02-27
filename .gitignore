@@ -4,3 +4,6 @@ node_modules
 dist
 docker
 /generated/prisma
+.DS_Store
+*.log
+coverage

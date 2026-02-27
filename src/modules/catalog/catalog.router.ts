@@ -7,6 +7,7 @@ import { CatalogQueryDTO } from "./dto/catalog-query.dto.js";
 import { CreateCategoryDTO } from "./dto/create-category.dto.js";
 import { UpdateCategoryDTO } from "./dto/update-category.dto.js";
 import { CategoryIdParamDTO } from "./dto/category-id.dto.js";
+import { requireUserApproval } from "../../middlewares/user-approval.middleware.js";
 
 export class CatalogRouter {
   private router: Router;
@@ -68,6 +69,7 @@ export class CatalogRouter {
       "/categories/:id",
       ...this.tenantAccessMiddlewares(),
       this.validationMiddleware.validateParams(CategoryIdParamDTO),
+      requireUserApproval,
       this.catalogController.deleteCategory,
     );
   };

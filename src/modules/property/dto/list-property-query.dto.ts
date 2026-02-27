@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsInt, IsOptional, Min } from "class-validator";
+import { IsIn, IsInt, IsOptional, IsString, MaxLength, Min } from "class-validator";
 
 export class ListPropertyQueryDTO {
   @IsOptional()
@@ -13,4 +13,17 @@ export class ListPropertyQueryDTO {
   @IsInt()
   @Min(1)
   limit: number = 20;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
+  @IsOptional()
+  @IsIn(["createdAt", "name", "cityName"])
+  sortBy?: "createdAt" | "name" | "cityName";
+
+  @IsOptional()
+  @IsIn(["asc", "desc"])
+  sortOrder?: "asc" | "desc";
 }
