@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "build": "npx prisma generate && tsc",
+    "build": "npx prisma generate && tsc && node scripts/copy-mjs-assets.mjs",
     "test": "node scripts/test-runner.mjs unit",
     "test:integration": "node scripts/test-runner.mjs integration",
     "start": "node dist/src/index.js",
